@@ -1,0 +1,9 @@
+/* MIBU 像素猫的专用色：取值与 MREAD 原版亮色逐字节一致（MREAD 的
+   --brand-strong / --brand / --brand-foreground）。
+   猫不区分亮暗主题，两种主题共用这一组色（用户 2026-10-25 定：
+   暗色那套 #74e8dc/#5be0d1/#082f2c 看着奇怪，不用）。 */
+:root {
+  --mibu-fur: #17a89a;
+  --mibu-light: #47d1c1;
+  --mibu-ink: #083b38;
+}

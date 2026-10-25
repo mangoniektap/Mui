@@ -1,0 +1,6 @@
+@theme inline {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "Cascadia Code", Consolas,
+    "Liberation Mono", monospace;
+}

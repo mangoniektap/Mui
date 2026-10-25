@@ -1,0 +1,63 @@
+/* 阴影的"源"变量叫 --elevation-*，不叫 --shadow-*。
+   原因：Tailwind 的 .shadow-* 工具类会把值**内联**进类里（`.shadow-xs{--tw-shadow:0 1px 2px 0 …}`），
+   它根本不读 --shadow-xs；再加上 Tailwind 自己就有一组同名主题变量 --shadow-*。
+   所以在 .dark 里覆盖 --shadow-* 是无效的（改了也没人读）。
+   下面的 @theme inline 把 --shadow-* 映射到 --elevation-*，工具类生成的才是
+   `--tw-shadow: var(--elevation-xs)`，暗色覆盖这才真正生效。 */
+@theme inline {
+  --shadow-2xs: var(--elevation-2xs);
+  --shadow-xs: var(--elevation-xs);
+  --shadow-sm: var(--elevation-sm);
+  --shadow-md: var(--elevation-md);
+  --shadow-lg: var(--elevation-lg);
+  --shadow-xl: var(--elevation-xl);
+  --shadow-2xl: var(--elevation-2xl);
+}
+
+:root {
+  /* 亮色：黑晕，向下偏移 = 投影 */
+  --elevation-2xs: 0 1px rgb(0 0 0 / 0.05);
+  --elevation-xs: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --elevation-sm: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  --elevation-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --elevation-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --elevation-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+  --elevation-2xl: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+
+  /* ── 玻璃用的 drop-shadow 版：档位与上面一一对应 ──────────────────
+     drop-shadow() 只吃「偏移 / 模糊 / 颜色」，没有 spread、也不吃逗号叠层，
+     所以上面那组喂不进去。下面每档 = 同名 box-shadow 去掉 spread，
+     并把负 spread 收缩掉的那点范围折进模糊半径（≈ 原模糊 + 2×spread），
+     视觉半径与对应 box-shadow 档对齐。引擎直接读这组变量，不存在内联问题。 */
+  --shadow-glass-ink: rgb(0 0 0 / 0.1); /* 影子颜色：暗色换成白光（见下） */
+  --shadow-glass-xs: 0 1px 2px rgb(0 0 0 / 0.05);
+  --shadow-glass-sm: 0 1px 3px var(--shadow-glass-ink);
+  --shadow-glass-md: 0 4px 4px var(--shadow-glass-ink);
+  --shadow-glass-lg: 0 10px 9px var(--shadow-glass-ink);
+  --shadow-glass-xl: 0 20px 15px var(--shadow-glass-ink);
+}
+
+.dark {
+  /* 暗色把影子翻成光：黑色铺在近黑底上只有个位数明度差，模糊后完全不可辨
+     （"暗底要更黑"是自我抵消）。暗色能表达厚度的只有边缘的亮：
+     零偏移 + 逐档加大的模糊 = 一圈外发光，模糊半径与亮色同名档一致，
+     所以同一档在两种主题里扩散范围相同，只是明暗反相。 */
+  /* 暗色里卡片与容器常常同色（都 bg-card），白晕是唯一的边界信号，所以透明度要给够；
+     档差只靠模糊半径（1/2/3/5/9/15/25px），与亮色同名档一致。 */
+  --elevation-2xs: 0 0 1px rgb(255 255 255 / 0.07);
+  --elevation-xs: 0 0 2px rgb(255 255 255 / 0.09);
+  --elevation-sm: 0 0 3px rgb(255 255 255 / 0.11);
+  --elevation-md: 0 0 5px rgb(255 255 255 / 0.13);
+  --elevation-lg: 0 0 9px rgb(255 255 255 / 0.15);
+  --elevation-xl: 0 0 15px rgb(255 255 255 / 0.17);
+  --elevation-2xl: 0 0 25px rgb(255 255 255 / 0.2);
+
+  /* 玻璃同规则：drop-shadow 没有 spread，做不出 1px 硬亮环，只能给零偏移的小白晕；
+     下面四档都引用 ink，改 ink 即可统一调亮 / 调淡 */
+  --shadow-glass-ink: rgb(255 255 255 / 0.12);
+  --shadow-glass-xs: 0 0 2px rgb(255 255 255 / 0.09);
+  --shadow-glass-sm: 0 0 3px var(--shadow-glass-ink);
+  --shadow-glass-md: 0 0 5px var(--shadow-glass-ink);
+  --shadow-glass-lg: 0 0 9px var(--shadow-glass-ink);
+  --shadow-glass-xl: 0 0 15px var(--shadow-glass-ink);
+}
