@@ -4,6 +4,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.graphics.Color
 import com.mui.glass.GlassTokens
 import com.mui.token.MuiColors
 import com.mui.token.MuiPalette
@@ -16,6 +17,12 @@ val LocalGlassPalette = staticCompositionLocalOf { GlassTokens.Light }
 
 /** 当前是否暗色主题（暗色专属规则的判据，如 input/80、destructive 环 40%） */
 val LocalIsDark = staticCompositionLocalOf { false }
+
+/** 当前内容前景色：容器类组件（按钮/徽标/警告条…）就地覆盖，MuiText 默认读它 */
+val LocalMuiContentColor = staticCompositionLocalOf<Color> { Color.Unspecified }
+
+/** 玻璃背面里「页面」的颜色：玻璃组件透过球折射它；容器可覆盖（默认退到 background） */
+val LocalMuiPageColor = staticCompositionLocalOf<Color> { Color.Unspecified }
 
 /**
  * Mui 主题：只提供令牌，不包 MaterialTheme——组件全部读 [LocalMuiPalette]。
