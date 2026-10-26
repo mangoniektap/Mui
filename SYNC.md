@@ -1,93 +1,103 @@
 # SYNC.md — 双语言同步台账
 
 > 规则：令牌/样式/组件任何修改，web 与 kotlin 同一批提交都改，commit 注明 `web+kt`，并更新本表。
-> 命名对应：`--foo-bar` ↔ `FooBar`/`fooBar`（Kotlin 常量/参数），`button.tsx` ↔ `MuiButton.kt`。
+> 命名对应：`--foo-bar` ↔ `fooBar`（Kotlin 常量/参数），`button.tsx` ↔ `MuiButton.kt`。
 
 ## 一、令牌映射
 
-| 语义 | web（CSS 变量） | kotlin（Kotlin 常量） | 状态 |
+| 语义 | web | kotlin | 状态 |
 | --- | --- | --- | --- |
-| 颜色（亮/暗） | `tokens/colors.css` 全部变量 | `MuiColors.kt`（oklch→sRGB 脚本生成） | 待生成 |
-| 圆角 | `tokens/radius.css` | `MuiRadius.kt` | 待生成 |
-| 阴影 | `tokens/shadow.css`（`--elevation-*`） | `MuiElevation.kt` | 待生成 |
-| 字体 | `tokens/typography.css` | `MuiTypography.kt` | 待生成 |
-| 玻璃 | `tokens/glass.css`（jade/gray 双通道、lens-chroma 等） | `GlassTokens.kt` | 待生成 |
-| 玻璃引擎 | `surfaces/liquid-glass.tsx`（WebGL SDF） | `glass/GlassEngine.kt`（AGSL） | 待移植 |
-| 实色面 | `surfaces/classical.ts` | `glass/Classical.kt` | 待移植 |
+| 颜色（亮/暗） | `tokens/colors.css` | `token/MuiColors.kt`（MuiColors.Light / Dark，45 色 ×2，脚本生成） | ✅ |
+| 圆角 | `tokens/radius.css`（--radius 10px） | `token/MuiRadius.kt`（sm6/md8/lg10/xl14） | ✅ |
+| 阴影 | `tokens/shadow.css`（`--elevation-*` 双主题 + `--shadow-glass-*`） | `token/MuiElevation.kt`（lightXs..dark2xl + glassShadowLight/Dark） | ✅ |
+| 字体 | `tokens/typography.css` | `token/MuiTypography.kt`（sans=Default / mono=Monospace，Android 无同一套栈） | ✅ |
+| 玻璃令牌 | `tokens/glass.css` | `glass/GlassTokens.kt`（Light/Dark GlassPalette + 全部标量） | ✅ |
+| 玻璃引擎 | `surfaces/liquid-glass.tsx`（WebGL SDF） | `glass/GlassShader.kt`（AGSL 源）+ `glass/GlassLens.kt`（Composable：按压动画 / 惯性应变 / 影子） | ✅ |
+| 实色面配方 | `surfaces/classical.ts` | 逐组件落在 components 里（聚焦环 = theme/MuiFocusRing.kt，阴影 = theme/MuiShadow.kt） | ✅ |
+| 令牌生成 | — | `tools/gen_kotlin_tokens.py`（改 CSS 后重跑，产物勿手改） | ✅ |
 
-## 二、组件映射
+## 二、组件映射（63/63 全覆盖）
 
-状态说明：✅ 已同步 / ⏳ 两侧有差异待对齐。
+状态说明：✅ 已移植并同步。
 
-| 组件 | web | kotlin | 状态 |
-| --- | --- | --- | --- |
-| Button | `button.tsx` | `MuiButton.kt` | 待移植 |
-| Input | `input.tsx` | `MuiInput.kt` | 待移植 |
-| Textarea | `textarea.tsx` | `MuiTextarea.kt` | 待移植 |
-| Label | `label.tsx` | `MuiLabel.kt` | 待移植 |
-| Badge | `badge.tsx` | `MuiBadge.kt` | 待移植 |
-| Card | `card.tsx` | `MuiCard.kt` | 待移植 |
-| Separator | `separator.tsx` | `MuiSeparator.kt` | 待移植 |
-| Avatar | `avatar.tsx` | `MuiAvatar.kt` | 待移植 |
-| Skeleton | `skeleton.tsx` | `MuiSkeleton.kt` | 待移植 |
-| Spinner | `spinner.tsx` | `MuiSpinner.kt` | 待移植 |
-| Switch | `switch.tsx` | `MuiSwitch.kt` | 待移植 |
-| Toggle | `toggle.tsx` | `MuiToggle.kt` | 待移植 |
-| ToggleGroup | `toggle-group.tsx` | `MuiToggleGroup.kt` | 待移植 |
-| Checkbox | `checkbox.tsx` | `MuiCheckbox.kt` | 待移植 |
-| RadioGroup | `radio-group.tsx` | `MuiRadioGroup.kt` | 待移植 |
-| Slider | `slider.tsx` | `MuiSlider.kt` | 待移植 |
-| Tabs | `tabs.tsx` | `MuiTabs.kt` | 待移植 |
-| Select | `select.tsx` | `MuiSelect.kt` | 待移植 |
-| Combobox | `combobox.tsx` | `MuiCombobox.kt` | 待移植 |
-| Picker | `picker.tsx` | `MuiPicker.kt` | 待移植 |
-| Dialog | `dialog.tsx` | `MuiDialog.kt` | 待移植 |
-| AlertDialog | `alert-dialog.tsx` | `MuiAlertDialog.kt` | 待移植 |
-| Sheet | `sheet.tsx` | `MuiSheet.kt` | 待移植 |
-| Drawer | `drawer.tsx` | `MuiDrawer.kt` | 待移植 |
-| Popover | `popover.tsx` | `MuiPopover.kt` | 待移植 |
-| Tooltip | `tooltip.tsx` | `MuiTooltip.kt` | 待移植 |
-| HoverCard | `hover-card.tsx` | `MuiHoverCard.kt` | 待移植 |
-| DropdownMenu | `dropdown-menu.tsx` | `MuiDropdownMenu.kt` | 待移植 |
-| ContextMenu | `context-menu.tsx` | `MuiContextMenu.kt` | 待移植 |
-| Menubar | `menubar.tsx` | `MuiMenubar.kt` | 待移植 |
-| Alert | `alert.tsx` | `MuiAlert.kt` | 待移植 |
-| AlertDialog 以外的确认 | `alert-dialog.tsx` | 同上 | — |
-| Progress | `progress.tsx` | `MuiProgress.kt` | 待移植 |
-| Accordion | `accordion.tsx` | `MuiAccordion.kt` | 待移植 |
-| Collapsible | `collapsible.tsx` | `MuiCollapsible.kt` | 待移植 |
-| Breadcrumb | `breadcrumb.tsx` | `MuiBreadcrumb.kt` | 待移植 |
-| Pagination | `pagination.tsx` | `MuiPagination.kt` | 待移植 |
-| NavigationMenu | `navigation-menu.tsx` | `MuiNavigationMenu.kt` | 待移植 |
-| Command | `command.tsx` | `MuiCommand.kt` | 待移植 |
-| Table | `table.tsx` | `MuiTable.kt` | 待移植 |
-| ScrollArea | `scroll-area.tsx` | `MuiScrollArea.kt` | 待移植 |
-| Carousel | `carousel.tsx` | `MuiCarousel.kt` | 待移植 |
-| Chart | `chart.tsx` | `MuiChart.kt` | 待移植 |
-| Resizable | `resizable.tsx` | `MuiResizable.kt` | 待移植 |
-| Sidebar | `sidebar.tsx` | `MuiSidebar.kt` | 待移植 |
-| AspectRatio | `aspect-ratio.tsx` | `MuiAspectRatio.kt` | 待移植 |
-| ButtonGroup | `button-group.tsx` | `MuiButtonGroup.kt` | 待移植 |
-| Item | `item.tsx` | `MuiItem.kt` | 待移植 |
-| Empty | `empty.tsx` | `MuiEmpty.kt` | 待移植 |
-| Kbd | `kbd.tsx` | `MuiKbd.kt` | 待移植 |
-| Field | `field.tsx` | `MuiField.kt` | 待移植 |
-| Form | `form.tsx` | `MuiForm.kt` | 待移植 |
-| InputGroup | `input-group.tsx` | `MuiInputGroup.kt` | 待移植 |
-| InputOTP | `input-otp.tsx` | `MuiInputOtp.kt` | 待移植 |
-| Calendar | `calendar.tsx` | `MuiCalendar.kt` | 待移植 |
-| Attachment | `attachment.tsx` | `MuiAttachment.kt` | 待移植 |
-| Bubble | `bubble.tsx` | `MuiBubble.kt` | 待移植 |
-| Message | `message.tsx` | `MuiMessage.kt` | 待移植 |
-| MessageScroller | `message-scroller.tsx` | `MuiMessageScroller.kt` | 待移植 |
-| Marker | `marker.tsx` | `MuiMarker.kt` | 待移植 |
-| Direction | `direction.tsx` | `MuiDirection.kt` | 待移植 |
-| Sonner(Toast) | `sonner.tsx` | `MuiToast.kt` | 待移植 |
-| 像素猫 | `mibu-cat.tsx` | `MibuCat.kt` | 待移植 |
-| 红绿灯 | `traffic-lights.tsx` | `TrafficLights.kt` | 待移植 |
+| 组件 | web | kotlin | 状态 | 备注 |
+| --- | --- | --- | --- | --- |
+| Button | button.tsx | MuiButton.kt | ✅ | variant/size 全档 |
+| Input | input.tsx | MuiInput.kt | ✅ | |
+| Textarea | textarea.tsx | MuiTextarea.kt | ✅ | |
+| Label | label.tsx | MuiLabel.kt | ✅ | |
+| Badge | badge.tsx | MuiBadge.kt | ✅ | |
+| Card | card.tsx | MuiCard.kt | ✅ | |
+| Separator | separator.tsx | MuiSeparator.kt | ✅ | |
+| Avatar | avatar.tsx | MuiAvatar.kt | ✅ | |
+| Skeleton | skeleton.tsx | MuiSkeleton.kt | ✅ | |
+| Spinner | spinner.tsx | MuiSpinner.kt | ✅ | |
+| Switch | switch.tsx | MuiSwitch.kt | ✅ | 胶囊拇指+拖动吸附+按压换档 |
+| Slider | slider.tsx | MuiSlider.kt | ✅ | 玻璃拇指，单值/区间 |
+| Toggle | toggle.tsx | MuiToggle.kt | ✅ | |
+| ToggleGroup | toggle-group.tsx | MuiToggleGroup.kt | ✅ | single=白胶囊底座+玻璃滑块；multiple=按钮组 |
+| Select | select.tsx | MuiSelect.kt | ✅ | 数据驱动（TODO: 键盘导航） |
+| Tabs | tabs.tsx | MuiTabs.kt | ✅ | default/line 双变体 |
+| Combobox | combobox.tsx | MuiCombobox.kt | ✅ | List<String> 起步 |
+| Picker | picker.tsx | MuiPicker.kt | ✅ | 转盘曲率/吸附/gray 玻璃条（TODO: 滚轮） |
+| Dialog | dialog.tsx | MuiDialog.kt | ✅ | |
+| AlertDialog | alert-dialog.tsx | MuiAlertDialog.kt | ✅ | |
+| Sheet | sheet.tsx | MuiSheet.kt | ✅ | 四向 |
+| Drawer | drawer.tsx | MuiDrawer.kt | ✅ | |
+| Popover | popover.tsx | MuiPopover.kt | ✅ | |
+| Tooltip | tooltip.tsx | MuiTooltip.kt | ✅ | |
+| HoverCard | hover-card.tsx | MuiHoverCard.kt | ✅ | |
+| DropdownMenu | dropdown-menu.tsx | MuiDropdownMenu.kt | ✅ | |
+| ContextMenu | context-menu.tsx | MuiContextMenu.kt | ✅ | 长按/右键 |
+| Menubar | menubar.tsx | MuiMenubar.kt | ✅ | |
+| Alert | alert.tsx | MuiAlert.kt | ✅ | |
+| Progress | progress.tsx | MuiProgress.kt | ✅ | |
+| Accordion | accordion.tsx | MuiAccordion.kt | ✅ | 高度动画 |
+| Collapsible | collapsible.tsx | MuiCollapsible.kt | ✅ | |
+| Breadcrumb | breadcrumb.tsx | MuiBreadcrumb.kt | ✅ | |
+| Pagination | pagination.tsx | MuiPagination.kt | ✅ | |
+| NavigationMenu | navigation-menu.tsx | MuiNavigationMenu.kt | ✅ | |
+| Command | command.tsx | MuiCommand.kt | ✅ | |
+| Table | table.tsx | MuiTable.kt | ✅ | |
+| ScrollArea | scroll-area.tsx | MuiScrollArea.kt | ✅ | |
+| Carousel | carousel.tsx | MuiCarousel.kt | ✅ | HorizontalPager |
+| Chart | chart.tsx | MuiChart.kt | ✅ | Canvas 三模式（TODO: 坐标轴/tooltip） |
+| Resizable | resizable.tsx | MuiResizable.kt | ✅ | |
+| Sidebar | sidebar.tsx | MuiSidebar.kt | ✅ | 折叠动画 |
+| AspectRatio | aspect-ratio.tsx | MuiAspectRatio.kt | ✅ | |
+| ButtonGroup | button-group.tsx | MuiButtonGroup.kt | ✅ | |
+| Item | item.tsx | MuiItem.kt | ✅ | |
+| Empty | empty.tsx | MuiEmpty.kt | ✅ | |
+| Kbd | kbd.tsx | MuiKbd.kt | ✅ | |
+| Field | field.tsx | MuiField.kt | ✅ | |
+| Form | form.tsx | MuiForm.kt | ✅ | RHF 状态机不移植（文件头 TODO） |
+| InputGroup | input-group.tsx | MuiInputGroup.kt | ✅ | |
+| InputOTP | input-otp.tsx | MuiInputOtp.kt | ✅ | |
+| Calendar | calendar.tsx | MuiCalendar.kt | ✅ | 单选月历 |
+| Attachment | attachment.tsx | MuiAttachment.kt | ✅ | |
+| Bubble | bubble.tsx | MuiBubble.kt | ✅ | |
+| Message | message.tsx | MuiMessage.kt | ✅ | |
+| MessageScroller | message-scroller.tsx | MuiMessageScroller.kt | ✅ | |
+| Marker | marker.tsx | MuiMarker.kt | ✅ | |
+| Direction | direction.tsx | MuiDirection.kt | ✅ | |
+| Sonner(Toast) | sonner.tsx | MuiToast.kt | ✅ | |
+| 像素猫 | mibu-cat.tsx + cat-pose.ts + hooks/use-mibu-cat-pose.ts | MibuCat.kt + CatPose.kt | ✅ | 三专用色 #17a89a/#47d1c1/#083b38 不分主题；姿态系统逐函数移植 |
+| 红绿灯 | traffic-lights.tsx | MuiTrafficLights.kt | ✅ | 点击光斑铺满（全屏 Popup）→ 铺满瞬间提交 |
 
-## 三、修改日志
+各文件头部的 `// TODO:` 行 = 未移植的次要 web 行为（键盘导航、RTL、断点响应等），改动对应组件时优先补齐。
+
+## 三、showcase
+
+| web | kotlin | 状态 |
+| --- | --- | --- |
+| `src/showcase/`（registry 65 入口 + 页面） | `kotlin/showcase/`（MainActivity 分区滚动，对齐 registry 分区顺序 + Palette/Tokens 演示） | ✅（演示为代表性 demo，未逐条复刻 65 入口的全部微变体） |
+
+## 四、修改日志
 
 | 日期 | 内容 | commit |
 | --- | --- | --- |
-| 2026-10-26 | 仓库重构为 web/ 双文件夹结构 | 待填 |
+| 2026-10-26 | 仓库重构为 web/ 双文件夹结构 | 6d1f1b6 |
+| 2026-10-26 | kotlin 骨架 + 令牌生成 + AGSL 引擎 + 主题层 | 117bd8d |
+| 2026-10-26 | 基础组件批 + 玻璃样板 Switch | 2366df4 |
+| 2026-10-26 | 全量组件移植（63/63） | a36c9ab |
+| 2026-10-26 | showcase 演示 app + 台账定稿 | 本次 |
