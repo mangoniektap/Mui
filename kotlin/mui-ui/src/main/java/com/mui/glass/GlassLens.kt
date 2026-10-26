@@ -151,6 +151,7 @@ class GlassInertiaState {
  * @param pressed 按住态：引擎自己跑按压动画，进度同时驱动中心凹透镜与 swell
  * @param lens 手动指定按压进度 0..1，覆盖 pressed 的动画（多块玻璃各自按压时用）
  * @param lensBand 覆盖 --glass-lens-band（小件玻璃给更窄的斜面，如开关球 0.3）
+ * @param lensCompress 覆盖 --glass-lens-compress（按压压缩率，小件玻璃给小值如 0.2）
  * @param shadow 影子档位（引擎层绘制，与 web 的 drop-shadow 同语义）
  */
 @Composable
@@ -165,6 +166,7 @@ fun GlassLens(
     pressed: Boolean = false,
     lens: Float? = null,
     lensBand: Float? = null,
+    lensCompress: Float? = null,
     shadow: GlassShadowLevel = GlassShadowLevel.SM,
 ) {
     val density = LocalDensity.current
@@ -262,7 +264,7 @@ fun GlassLens(
                 shader.setFloatUniform("uBulge", bul)
                 shader.setFloatUniform("uBendBand", floatArrayOf(lensBand ?: GlassTokens.lensBand))
                 shader.setFloatUniform("uBend", floatArrayOf(GlassTokens.lensBend))
-                shader.setFloatUniform("uCompress", floatArrayOf(GlassTokens.lensCompress))
+                shader.setFloatUniform("uCompress", floatArrayOf(lensCompress ?: GlassTokens.lensCompress))
                 shader.setFloatUniform("uLens", floatArrayOf((lens ?: press.value).coerceIn(0f, 1f)))
                 shader.setFloatUniform("uChroma", floatArrayOf(GlassTokens.lensChromaDp * dpr))
                 shader.setFloatUniform("uBody", floatArrayOf(jade))

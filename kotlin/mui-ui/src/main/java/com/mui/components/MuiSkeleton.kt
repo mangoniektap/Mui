@@ -13,7 +13,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import com.mui.theme.LocalMuiPalette
-import com.mui.theme.MuiRadius
+import com.mui.token.MuiRadius
 
 /**
  * 骨架屏：rounded-md 底色 --accent，透明度脉冲呼吸（animate-pulse 的对应物）。

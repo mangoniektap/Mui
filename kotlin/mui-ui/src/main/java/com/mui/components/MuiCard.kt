@@ -16,7 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.mui.theme.LocalMuiContentColor
 import com.mui.theme.LocalMuiPalette
-import com.mui.theme.MuiRadius
+import com.mui.token.MuiRadius
 import com.mui.theme.muiElevation
 
 /**

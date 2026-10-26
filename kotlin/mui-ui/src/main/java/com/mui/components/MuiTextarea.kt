@@ -19,7 +19,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mui.theme.LocalMuiPalette
-import com.mui.theme.MuiRadius
+import com.mui.token.MuiRadius
 import com.mui.theme.muiElevation
 import com.mui.theme.muiFocusRing
 import com.mui.theme.rememberMuiInteractionSource

@@ -30,7 +30,7 @@ import com.mui.token.MuiPalette
 import com.mui.theme.LocalIsDark
 import com.mui.theme.LocalMuiContentColor
 import com.mui.theme.LocalMuiPalette
-import com.mui.theme.MuiRadius
+import com.mui.token.MuiRadius
 import com.mui.theme.muiElevation
 import com.mui.theme.muiFocusRing
 import com.mui.theme.rememberMuiInteractionSource
