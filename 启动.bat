@@ -2,6 +2,7 @@
 chcp 936 >nul
 title Mui UI Library
 cd /d "%~dp0"
+cd web
 
 where node >nul 2>nul
 if errorlevel 1 goto NONODE

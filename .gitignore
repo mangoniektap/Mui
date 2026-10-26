@@ -1,7 +1,19 @@
-node_modules
-dist
-dist-ssr
-*.local
+# web (React)
+web/node_modules/
+web/dist/
+web/dist-ssr/
+web/*.local
+
+# kotlin (Android / Compose)
+kotlin/.gradle/
+kotlin/build/
+kotlin/*/build/
+kotlin/local.properties
+kotlin/.idea/
+kotlin/.kotlin/
+*.iml
+
+# common
 .DS_Store
 *.log
-.workbuddy
+.workbuddy/
