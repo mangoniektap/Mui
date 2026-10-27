@@ -1,5 +1,6 @@
 package com.mui.theme
 
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -43,6 +44,11 @@ fun MuiTheme(
         // 玻璃的「背面」默认就是页面底色。少了这一行，玻璃的 backdrop 画的是
         // Color.Unspecified（= 什么都不画），整块玻璃在视觉上等于不存在。
         LocalMuiPageColor provides palette.background,
+        // 关掉 Foundation 默认的「按压灰罩」：默认实现按下时画一块 30% 黑的**矩形**，
+        // 不认识圆角，于是任何没写 indication = null 的 clickable 按下去整块发灰、
+        // 圆角外还露直角。Mui 没有 ripple 语言，这里一次管住库内和接入方的所有 clickable。
+        // 详见 MuiNoIndication 的注释。
+        LocalIndication provides MuiNoIndication,
         content = content,
     )
 }

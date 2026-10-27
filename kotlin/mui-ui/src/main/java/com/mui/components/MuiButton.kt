@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import com.mui.theme.LocalIsDark
 import com.mui.theme.LocalMuiContentColor
 import com.mui.theme.LocalMuiPalette
+import com.mui.theme.faded
 import com.mui.theme.muiElevation
 import com.mui.theme.muiFocusRing
 import com.mui.theme.rememberMuiInteractionSource
@@ -184,14 +185,18 @@ private fun buttonSurface(
             background = when {
                 active && isDark -> frac(palette.accent, 0.50f)
                 active -> palette.accent
-                else -> Color.Transparent
+                // 无色端点必须写 accent.faded()（同色相 a=0），不能写 Color.Transparent：
+                // 后者 RGB 是黑，按下瞬间会被插值成一段灰，再收束到 accent 淡青，
+                // 看起来就是「先变灰、然后才变淡青」。详见 Color.faded() 注释。
+                else -> palette.accent.faded()
             },
             foreground = if (active) palette.accentForeground else palette.foreground,
             borderColor = Color.Transparent,
             showBorder = false,
         )
         ButtonVariant.Link -> ButtonSurface(
-            background = Color.Transparent,
+            // 全程无背景；同样用 faded() 兜住变体切换时的插值，避免经过灰。
+            background = palette.primary.faded(),
             foreground = palette.primary,
             borderColor = Color.Transparent,
             showBorder = false,
