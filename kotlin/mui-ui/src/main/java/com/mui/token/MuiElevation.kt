@@ -2,6 +2,7 @@ package com.mui.token
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 
 /** 一层投影：偏移 / 模糊 / 颜色（spread 已按 shadow.css 的设计折进 blur）。 */
 data class MuiShadowSpec(val dx: Dp, val dy: Dp, val blur: Dp, val color: Color)

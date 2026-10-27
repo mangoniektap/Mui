@@ -1,16 +1,18 @@
 package com.mui.components
 
-import androidx.compose.foundation.Arrangement
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -24,16 +26,17 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.mui.token.MuiPalette
 import com.mui.theme.LocalIsDark
 import com.mui.theme.LocalMuiContentColor
 import com.mui.theme.LocalMuiPalette
-import com.mui.token.MuiRadius
 import com.mui.theme.muiElevation
 import com.mui.theme.muiFocusRing
 import com.mui.theme.rememberMuiInteractionSource
+import com.mui.token.MuiPalette
+import com.mui.token.MuiRadius
 
 /** 按钮外观档位（button.tsx 的 variant） */
 enum class ButtonVariant { Default, Destructive, Outline, Secondary, Ghost, Link }
@@ -70,13 +73,24 @@ fun MuiButton(
     val pressed by interactionSource.collectIsPressedAsState()
 
     val surface = buttonSurface(variant, palette, isDark, hovered, pressed)
+    val colorSpec = tween<Color>(150, easing = CubicBezierEasing(0.4f, 0f, 0.2f, 1f))
+    val background by animateColorAsState(surface.background, colorSpec, label = "buttonBackground")
+    val foreground by animateColorAsState(surface.foreground, colorSpec, label = "buttonForeground")
+    val borderColor by animateColorAsState(surface.borderColor, colorSpec, label = "buttonBorder")
     val shape = RoundedCornerShape(MuiRadius.md)
+    val textStyle = muiButtonTextStyle(size).copy(
+        textDecoration = if (variant == ButtonVariant.Link && (hovered || pressed)) {
+            TextDecoration.Underline
+        } else {
+            null
+        },
+    )
 
     val sizeModifier = when (size) {
-        ButtonSize.Default -> Modifier.defaultMinSize(minHeight = 36.dp).padding(horizontal = 16.dp)
-        ButtonSize.Xs -> Modifier.defaultMinSize(minHeight = 24.dp).padding(horizontal = 8.dp)
-        ButtonSize.Sm -> Modifier.defaultMinSize(minHeight = 32.dp).padding(horizontal = 12.dp)
-        ButtonSize.Lg -> Modifier.defaultMinSize(minHeight = 40.dp).padding(horizontal = 24.dp)
+        ButtonSize.Default -> Modifier.height(36.dp).padding(horizontal = 16.dp)
+        ButtonSize.Xs -> Modifier.height(24.dp).padding(horizontal = 8.dp)
+        ButtonSize.Sm -> Modifier.height(32.dp).padding(horizontal = 12.dp)
+        ButtonSize.Lg -> Modifier.height(40.dp).padding(horizontal = 24.dp)
         ButtonSize.Icon -> Modifier.size(36.dp)
         ButtonSize.IconXs -> Modifier.size(24.dp)
         ButtonSize.IconSm -> Modifier.size(32.dp)
@@ -85,11 +99,11 @@ fun MuiButton(
 
     Box(
         modifier = modifier
-            .clip(shape)
-            .background(surface.background)
-            .then(if (surface.showBorder) Modifier.border(1.dp, surface.borderColor, shape) else Modifier)
             .then(if (variant == ButtonVariant.Outline) Modifier.muiElevation("xs", shape) else Modifier)
             .muiFocusRing(interactionSource, shape, invalid)
+            .clip(shape)
+            .background(background)
+            .then(if (surface.showBorder) Modifier.border(1.dp, borderColor, shape) else Modifier)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -98,8 +112,12 @@ fun MuiButton(
             )
             .then(sizeModifier)
             .then(if (!enabled) Modifier.alpha(0.5f) else Modifier),
+        contentAlignment = Alignment.Center,
     ) {
-        CompositionLocalProvider(LocalMuiContentColor provides surface.foreground) {
+        CompositionLocalProvider(
+            LocalMuiContentColor provides foreground,
+            LocalMuiTextStyle provides textStyle,
+        ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(gapOf(size)),

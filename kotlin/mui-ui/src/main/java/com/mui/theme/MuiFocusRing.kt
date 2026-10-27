@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.unit.dp
 
 /**
@@ -49,11 +50,7 @@ fun Modifier.muiFocusRing(
     drawBehind {
         if (ringAlpha <= 0f) return@drawBehind
         val outline = shape.createOutline(size, layoutDirection, this)
-        drawOutline(
-            outline = outline,
-            color = ringColor.copy(alpha = ringColor.alpha * ringAlpha),
-            style = Stroke(width = 3.dp.toPx()),
-        )
+        drawOutlineCompat(outline, ringColor.copy(alpha = ringColor.alpha * ringAlpha), 3.dp.toPx())
     }
 }
 
@@ -73,7 +70,7 @@ fun Modifier.muiFocusRing(
     drawBehind {
         if (!focused) return@drawBehind
         val outline = shape.createOutline(size, layoutDirection, this)
-        drawOutline(outline = outline, color = ringColor, style = Stroke(width = 3.dp.toPx()))
+        drawOutlineCompat(outline, ringColor, 3.dp.toPx())
     }
 }
 
@@ -84,3 +81,26 @@ fun rememberMuiInteractionSource(): MutableInteractionSource =
 
 /** 前景色低透明度快捷（web 的 foreground/6 之类） */
 fun Color.withAlphaFrac(frac: Float): Color = copy(alpha = frac)
+
+/**
+ * 轮廓描边：Compose 的 DrawScope 没有跨 Outline 子类的统一 drawOutline，
+ * 这里按三种轮廓分别落到 drawRect / drawRoundRect / drawPath。
+ *
+ * @param outline 控件轮廓
+ * @param color 描边色
+ * @param widthPx 描边宽度（px）
+ */
+private fun DrawScope.drawOutlineCompat(outline: Outline, color: Color, widthPx: Float) {
+    val style = Stroke(width = widthPx)
+    when (outline) {
+        is Outline.Rectangle -> drawRect(color, outline.rect.topLeft, outline.rect.size, style = style)
+        is Outline.Rounded -> drawRoundRect(
+            color = color,
+            topLeft = Offset(outline.roundRect.left, outline.roundRect.top),
+            size = Size(outline.roundRect.width, outline.roundRect.height),
+            cornerRadius = CornerRadius(outline.roundRect.topLeftCornerRadius.x),
+            style = style,
+        )
+        is Outline.Generic -> drawPath(outline.path, color, style = style)
+    }
+}

@@ -37,4 +37,3 @@ dependencyResolutionManagement {
 
 rootProject.name = "Mui"
 include(":mui-ui")
-include(":showcase")

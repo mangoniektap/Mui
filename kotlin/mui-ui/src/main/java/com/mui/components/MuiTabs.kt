@@ -26,7 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mui.theme.LocalIsDark
 import com.mui.theme.LocalMuiPalette
-import com.mui.theme.MuiRadius
+import com.mui.token.MuiRadius
 import com.mui.theme.muiFocusRing
 import com.mui.theme.rememberMuiInteractionSource
 
@@ -113,7 +113,7 @@ fun MuiTabs(
             }
         }
         Box(Modifier.padding(top = 8.dp)) {
-            content(selected)
+            content(selected ?: items.first().value)
         }
     }
 }

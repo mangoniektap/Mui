@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.mui.theme.LocalMuiPalette
 import com.mui.theme.muiFocusRing
 import com.mui.theme.rememberMuiInteractionSource
 import kotlin.math.floor
@@ -226,7 +227,7 @@ fun MibuCat(
         }
         while (true) {
             delay((3200 + floor(Math.random() * 4200)).toLong())
-            val nextAct = IDLE_ACTS.floor(Math.random() * IDLE_ACTS.size)
+            val nextAct = IDLE_ACTS.floorAt(Math.random() * IDLE_ACTS.size)
             inner = nextAct.first
             delay(nextAct.second)
             inner = MibuCatAct.Idle
@@ -264,4 +265,5 @@ fun MibuCat(
 }
 
 /** 随机取待机小动作 */
-private fun <T> List<T>.floor(index: Double): T = get(floor(index).toInt().coerceIn(0, lastIndex))
+private fun <T> List<T>.floorAt(index: Double): T =
+    get(kotlin.math.floor(index).toInt().coerceIn(0, lastIndex))

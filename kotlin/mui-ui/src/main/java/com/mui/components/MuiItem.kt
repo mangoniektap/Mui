@@ -159,7 +159,7 @@ fun MuiItemMedia(
  * @param content 内容（建议 MuiItemTitle / MuiItemDescription）
  */
 @Composable
-fun MuiItemContent(
+fun RowScope.MuiItemContent(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {

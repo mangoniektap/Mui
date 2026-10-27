@@ -12,7 +12,8 @@ import { GlassLens, paintPageBackdrop } from "@/styles/surfaces/liquid-glass"
  *
  * 交互：鼠标滚轮 + 按住上下拖；松手（或滚轮停 140ms）吸附到最近一档。
  * 中间那条是 gray 档玻璃，只当"选中框"，pointer-events-none，指针直接穿透。
- * 项沿圆周排布（sin 定位置、cos 定大小与淡出、rotateX 做倾斜），像真的滚轮。
+ * 项沿圆周排布（sin 定位置、cos 定大小与淡出、rotateX 做倾斜），像真的滚轮 ——
+ * 但圆只是视觉：刻度列表是直的、两端不循环，转过侧面的档（|θ| ≥ π/2）不画。
  */
 
 /** 一档的高度；容器高 = ITEM_H × VISIBLE */
@@ -259,8 +260,11 @@ function Picker({
                   // sin 给纵向位置（边缘被压缩、不再等距），cos 给大小与透明度，
                   // rotateX 让它向屏幕里倒 —— 三条合起来才是"转盘"。
                   const theta = (i * ITEM_H - scroll) / RADIUS
+                  // 只画前弧：θ 是未取模的弧长角度，转过侧面的档直接不画。
+                  // 只判 cos 不够 —— sin/cos 以 2π 为周期，差一整圈（≈11.17 档）的档会
+                  // 重新落回正面、压在同一行上（21 档时能看到两圈数字叠着）。
+                  if (Math.abs(theta) >= Math.PI / 2) return null
                   const c = Math.cos(theta)
-                  if (c <= 0.02) return null // 转到背面就不画了
                   const y = Math.sin(theta) * RADIUS
                   const dist = Math.abs(theta)
                   const scale = 0.7 + 0.3 * c

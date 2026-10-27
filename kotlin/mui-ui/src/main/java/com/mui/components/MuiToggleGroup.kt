@@ -9,6 +9,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,8 +29,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -38,32 +39,33 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.graphics.painter.VectorPainter
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.VectorPainter
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mui.glass.GlassBody
 import com.mui.glass.GlassLens
+import com.mui.glass.glassCanvas
 import com.mui.glass.GlassShadowLevel
 import com.mui.glass.LensShape
 import com.mui.glass.paintPageBackdrop
 import com.mui.theme.LocalIsDark
 import com.mui.theme.LocalMuiPageColor
 import com.mui.theme.LocalMuiPalette
-import com.mui.theme.MuiRadius
 import com.mui.theme.muiElevation
 import com.mui.theme.muiFocusRing
 import com.mui.theme.rememberMuiInteractionSource
+import com.mui.token.MuiRadius
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.roundToInt
@@ -88,9 +90,21 @@ private val GLIDE_EASING = CubicBezierEasing(0.32f, 0.72f, 0f, 1f)
 /** 画布外扩边距 = 段高 × 这个比例：装下按压外鼓与惯性纵向膨胀 */
 private const val LENS_MARGIN_RATIO = 0.32f
 
-/** 段：纯文字（高 32dp）；段：图标 + 文字（竖排，11sp） */
+/** 段：纯文字（web `h-8 px-4 text-sm`） */
 private val SEG_TEXT_H = 32.dp
-private val SEG_STACK_VPAD = 8.dp
+/** 段：图标 + 文字（web `py-2 + gap-1 + size-4 + text-[11px] leading-none` = 8+16+4+11+8） */
+private val SEG_STACK_PAD_V = 8.dp
+private val SEG_STACK_GAP = 4.dp
+private val SEG_ICON = 16.dp
+private val SEG_PAD_H = 16.dp
+private val SEG_STACK_H = SEG_STACK_PAD_V * 2 + SEG_ICON + SEG_STACK_GAP + 11.dp
+
+/** 一个段的实测几何（相对根容器 border box）：段盒 / 图标盒 / 文字盒 */
+private data class SegGeom(
+    val box: Rect = Rect.Zero,
+    val icon: Rect? = null,
+    val label: Rect? = null,
+)
 
 /**
  * 开关组：Single（items 给齐）= 白胶囊底座 + 平灰玻璃滑块（按住切透明档、可拖动吸附）；
@@ -178,8 +192,17 @@ private fun SegmentedToggleGroup(
     var baseX by remember { mutableStateOf(0f) }
     var baseW by remember { mutableStateOf(0f) }
 
-    /** 每个段相对 Root 的盒子（px） */
-    var segs by remember { mutableStateOf<List<Rect>>(emptyList()) }
+    /** 每个段相对 Root 的实测几何（段盒 / 图标盒 / 文字盒，px） */
+    var geodes by remember { mutableStateOf<List<SegGeom>>(emptyList()) }
+    /** 段盒子视图：玻璃摆位、命中判定、吸附全按它算 */
+    val segs: List<Rect> = geodes.map { it.box }
+
+    fun updateGeom(i: Int, transform: (SegGeom) -> SegGeom) {
+        geodes = geodes.toMutableList().also { list ->
+            while (list.size <= i) list.add(SegGeom())
+            list[i] = transform(list[i])
+        }
+    }
 
     fun commit(next: String) {
         if (value == null) inner = next
@@ -188,6 +211,9 @@ private fun SegmentedToggleGroup(
 
     // 段盒子位置：逐段 onGloballyPositioned 量（相对 root）
     val rootOrigin = remember { mutableStateOf(Offset.Zero) }
+    val rootSize = remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+    // 内容原点（根容器的 padding）：玻璃画布的 offset 是相对内容原点给的
+    val contentPadPx = 2.dp.value * density.density
 
     val glassAnim = remember { Animatable(0f) }
     val targetSeg = segs.getOrNull(activeIndex)
@@ -202,17 +228,19 @@ private fun SegmentedToggleGroup(
         items.getOrNull(index)?.let { commit(it.value) }
     }
 
-    val segH = SEG_TEXT_H
-
     val baseShape = RoundedCornerShape(50)
     val resolvedPage = if (pageColor != Color.Unspecified) pageColor else palette.background
     val tint = activeColor ?: palette.foreground
 
     Box(
         modifier = modifier
-            .onGloballyPositioned { rootOrigin.value = it.boundsInRoot().topLeft }
+            .onGloballyPositioned {
+                rootOrigin.value = it.boundsInRoot().topLeft
+                rootSize.value = it.size
+            }
             .alpha(if (disabled) 0.5f else 1f)
-            .clip(baseShape)
+            // 不裁切：玻璃画布要外扩到根容器外（web 无 overflow:hidden），裁了会把
+            // 外扩区与按住的影子切掉。底座本身用带 shape 的 background/border 画圆角。
             .background(palette.card, baseShape)
             .border(1.dp, palette.input, baseShape)
             .muiElevation("sm", baseShape)
@@ -274,25 +302,23 @@ private fun SegmentedToggleGroup(
                 }
             }
             .padding(2.dp),
-        contentAlignment = Alignment.CenterStart,
+        contentAlignment = Alignment.TopStart,
     ) {
         // 段行
         Row(verticalAlignment = Alignment.CenterVertically) {
             items.forEachIndexed { i, item ->
                 val on = item.value == current
                 val segInteraction = rememberMuiInteractionSource()
+                // 段内三块几何各自实测（相对根容器）：玻璃背纹理按它们重绘图标与文字，
+                // 不再用「中心 ± 10dp」这类推算 —— 那套偏移一旦字号或行高变了就错位。
+                fun rel(coords: androidx.compose.ui.layout.LayoutCoordinates): Rect =
+                    coords.boundsInRoot().translate(-rootOrigin.value)
+
                 Box(
                     Modifier
-                        .onGloballyPositioned { coords ->
-                            val b = coords.boundsInRoot()
-                            val rel = b.translate(-rootOrigin.value)
-                            segs = segs.toMutableList().also { list ->
-                                while (list.size <= i) list.add(Rect.Zero)
-                                list[i] = rel
-                            }
-                        }
+                        .onGloballyPositioned { coords -> updateGeom(i) { it.copy(box = rel(coords)) } }
                         .clip(CircleShape)
-                        .height(if (item.icon != null) segH + SEG_STACK_VPAD else segH)
+                        .height(if (item.icon != null) SEG_STACK_H else SEG_TEXT_H)
                         .clickable(
                             interactionSource = segInteraction,
                             indication = null,
@@ -302,15 +328,20 @@ private fun SegmentedToggleGroup(
                             if (!on) commitAt(i)
                         }
                         .muiFocusRing(segInteraction, CircleShape)
-                        .padding(horizontal = 16.dp),
+                        .padding(horizontal = SEG_PAD_H),
                     contentAlignment = Alignment.Center,
                 ) {
                     if (item.icon != null) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(SEG_STACK_GAP),
+                        ) {
                             androidx.compose.foundation.Image(
                                 painter = androidx.compose.ui.graphics.vector.rememberVectorPainter(item.icon),
                                 contentDescription = null,
-                                modifier = Modifier.size(16.dp),
+                                modifier = Modifier
+                                    .size(SEG_ICON)
+                                    .onGloballyPositioned { coords -> updateGeom(i) { it.copy(icon = rel(coords)) } },
                                 colorFilter = ColorFilter.tint(
                                     when {
                                         on -> tint
@@ -323,6 +354,8 @@ private fun SegmentedToggleGroup(
                                 fontSize = 11.sp,
                                 lineHeight = 11.sp,
                                 fontWeight = FontWeight.Medium,
+                                modifier = Modifier
+                                    .onGloballyPositioned { coords -> updateGeom(i) { it.copy(label = rel(coords)) } },
                                 color = when {
                                     on -> tint
                                     else -> palette.mutedForeground
@@ -335,6 +368,8 @@ private fun SegmentedToggleGroup(
                             fontSize = 14.sp,
                             lineHeight = 20.sp,
                             fontWeight = FontWeight.Medium,
+                            modifier = Modifier
+                                .onGloballyPositioned { coords -> updateGeom(i) { it.copy(label = rel(coords)) } },
                             color = when {
                                 on -> tint
                                 else -> palette.mutedForeground
@@ -360,39 +395,54 @@ private fun SegmentedToggleGroup(
             val painters: List<VectorPainter> = items.map { item ->
                 key(item.value) { androidx.compose.ui.graphics.vector.rememberVectorPainter(item.icon ?: emptyIcon()) }
             }
-            Box(
-                Modifier
+            // 画布原点（相对根容器，浮点）：球心与背面全部按「取整后的原点」反推，
+            // dp→px 的余数补回浮点 uniform —— 否则玻璃内容与真实底座/文字差出亚像素。
+            val d = density.density
+            val glassLeftPx = glassLeft - marginPx
+            val glassTopPx = activeBox.top - marginPx
+            val originX = glassLeftPx.roundToInt()
+            val originY = glassTopPx.roundToInt()
+            // canvas 直接挂在 GlassLens 上（不再套一层 Box）：
+            // glassCanvas 对外报 0×0，套一层会让里层 matchParentSize 拿到 0×0 的父尺寸，
+            // GlassLens 的图形层随之变 0，着色器的 uRes 全错（实测玻璃糊成一团大圆）。
+            GlassLens(
+                modifier = Modifier
                     .offset {
-                        IntOffset(glassLeft.roundToInt() - marginPx.roundToInt(), activeBox.top.roundToInt() - marginPx.roundToInt())
+                        // offset 相对内容原点（padding 2dp），所以减回去
+                        IntOffset(
+                            (originX - contentPadPx).roundToInt(),
+                            (originY - contentPadPx).roundToInt(),
+                        )
                     }
-                    .size(
+                    .glassCanvas(
                         with(density) { segW.toDp() } + marginDp * 2,
                         with(density) { segHpx.toDp() } + marginDp * 2,
-                    )
-            ) {
-                GlassLens(
-                    modifier = Modifier.matchParentSize(),
-                    live = true,
-                    motion = 3,
-                    body = if (pressed) GlassBody.TRANSPARENT else GlassBody.GRAY,
-                    pressed = pressed,
-                    lensCompress = 0f,
-                    shadow = if (pressed) GlassShadowLevel.SM else GlassShadowLevel.NONE,
-                    shapes = listOf(
-                        LensShape(
-                            cx = marginPx / density.density + segW / density.density / 2f,
-                            cy = marginPx / density.density + segHpx / density.density / 2f,
-                            hw = segW / density.density / 2f,
-                            hh = segHpx / density.density / 2f,
-                            radius = segHpx / density.density / 2f,
-                            swell = 1f,
-                        )
                     ),
-                ) {
-                    // 背面 = 玻璃压着的那层：页面 + 底座（带投影与描边）+ 每段的字与图标
+                live = true,
+                motion = 3,
+                body = if (pressed) GlassBody.TRANSPARENT else GlassBody.GRAY,
+                pressed = pressed,
+                lensCompress = 0f,
+                shadow = if (pressed) GlassShadowLevel.SM else GlassShadowLevel.NONE,
+                shapes = listOf(
+                    LensShape(
+                        cx = (glassLeft + segW / 2f - originX) / d,
+                        cy = (activeBox.top + segHpx / 2f - originY) / d,
+                        hw = segW / density.density / 2f,
+                        hh = segHpx / density.density / 2f,
+                        radius = segHpx / density.density / 2f,
+                        swell = 1f,
+                    )
+                ),
+            ) {
+                    // 背面 = 玻璃压着的那层：页面 + 底座（带投影与描边）+ 每段的字与图标。
+                    // 一律按「画布原点 = 根容器里的 (originX, originY)」反推位置 ——
+                    // 拖动时底座/文字相对画布在滑动（web 同款，见 toggle-group.tsx 的 dx/dy）。
                     paintPageBackdrop(resolvedPage)
-                    val rootW = size.width - marginPx * 2
-                    val rootH = size.height - marginPx * 2
+                    val rootW = rootSize.value.width.toFloat()
+                    val rootH = rootSize.value.height.toFloat()
+                    val baseL = -originX.toFloat()
+                    val baseT = -originY.toFloat()
                     // 底座：实色胶囊 + 投影（白底座压白页面，靠影子给出边界）
                     drawIntoCanvas { canvas ->
                         val fw = androidx.compose.ui.graphics.Paint().asFrameworkPaint()
@@ -404,10 +454,10 @@ private fun SegmentedToggleGroup(
                             android.graphics.Color.argb((0.12f * 255).toInt(), 0, 0, 0),
                         )
                         canvas.nativeCanvas.drawRoundRect(
-                            marginPx,
-                            marginPx,
-                            marginPx + rootW,
-                            marginPx + rootH,
+                            baseL,
+                            baseT,
+                            baseL + rootW,
+                            baseT + rootH,
                             rootH / 2f,
                             rootH / 2f,
                             fw,
@@ -418,54 +468,52 @@ private fun SegmentedToggleGroup(
                         fw.strokeWidth = 1f * density.density
                         fw.color = palette.border.toArgb()
                         canvas.nativeCanvas.drawRoundRect(
-                            marginPx + 0.5f * density.density,
-                            marginPx + 0.5f * density.density,
-                            marginPx + rootW - 0.5f * density.density,
-                            marginPx + rootH - 0.5f * density.density,
+                            baseL + 0.5f * density.density,
+                            baseT + 0.5f * density.density,
+                            baseL + rootW - 0.5f * density.density,
+                            baseT + rootH - 0.5f * density.density,
                             rootH / 2f - 0.5f * density.density,
                             rootH / 2f - 0.5f * density.density,
                             fw,
                         )
                         fw.style = android.graphics.Paint.Style.FILL
                     }
-                    // 每段的字与图标重绘（玻璃盖住的区域能透出折射后的内容）
-                    segs.forEachIndexed { i, seg ->
+                    // 每段的字与图标重绘（玻璃盖住的区域能透出折射后的内容）。
+                    // 位置全部取实测盒（web 侧同样读 getBoundingClientRect）；
+                    // 拿不到实测值就跳过 —— 宁可这一帧不重绘，也不要用推算值错位。
+                    geodes.forEachIndexed { i, g ->
                         val item = items.getOrNull(i) ?: return@forEachIndexed
-                        val on = item.value == current
-                        val color = tint
-                        val cx = marginPx + seg.center.x
-                        if (item.icon != null) {
-                            val painter = painters.getOrNull(i) ?: return@forEachIndexed
-                            val iconSize = 16.dp.toPx()
-                            // 竖排：图标在上、文字在下
+                        g.icon?.let { iconBox ->
+                            val painter = painters.getOrNull(i) ?: return@let
                             drawIntoCanvas { canvas ->
                                 canvas.save()
-                                canvas.translate(cx - iconSize / 2f, marginPx + seg.top + seg.height / 2f - iconSize / 2f - 10.dp.toPx())
+                                canvas.translate(iconBox.left - originX, iconBox.top - originY)
                                 with(painter) {
                                     draw(
-                                        Size(iconSize, iconSize),
-                                        colorFilter = ColorFilter.tint(color),
+                                        Size(iconBox.width, iconBox.height),
+                                        colorFilter = ColorFilter.tint(tint),
                                     )
                                 }
                                 canvas.restore()
                             }
-                            val labelStyle = TextStyle(fontSize = 11.sp, fontWeight = FontWeight.Medium, color = color)
-                            val lr = textMeasurer.measure(item.label, labelStyle)
-                            drawText(
-                                lr,
-                                topLeft = Offset(cx - lr.size.width / 2f, marginPx + seg.center.y + 10.dp.toPx() - lr.size.height / 2f),
+                        }
+                        g.label?.let { labelBox ->
+                            val style = TextStyle(
+                                fontSize = if (item.icon != null) 11.sp else 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = tint,
                             )
-                        } else {
-                            val labelStyle = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Medium, color = color)
-                            val lr = textMeasurer.measure(item.label, labelStyle)
+                            val lr = textMeasurer.measure(item.label, style)
                             drawText(
                                 lr,
-                                topLeft = Offset(cx - lr.size.width / 2f, marginPx + seg.center.y - lr.size.height / 2f),
+                                topLeft = Offset(
+                                    labelBox.center.x - originX - lr.size.width / 2f,
+                                    labelBox.center.y - originY - lr.size.height / 2f,
+                                ),
                             )
                         }
                     }
                 }
-            }
         }
     }
 }
@@ -558,9 +606,6 @@ private fun MultipleToggleGroup(
         }
     }
 }
-
-/** 多选组的变体（default = 无框 / outline = 描边） */
-enum class ToggleVariant { Default, Outline }
 
 /** 空图标占位（无 icon 的段在玻璃纹理里跳过绘制） */
 private fun emptyIcon(): ImageVector = EMPTY_ICON

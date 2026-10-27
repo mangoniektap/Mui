@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -43,8 +44,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mui.theme.LocalMuiContentColor
 import com.mui.theme.LocalMuiPalette
-import com.mui.token.MuiRadius
 import com.mui.theme.rememberMuiInteractionSource
+import com.mui.token.MuiRadius
 
 // TODO: web 的移动端 Sheet 抽屉形态、cookie 持久化、Cmd/Ctrl+B 快捷键未移植。
 // TODO: web 的 SidebarMenuBadge/MenuSkeleton/MenuSub/Tooltip 提示未移植。
@@ -65,12 +66,6 @@ enum class SidebarMenuButtonSize { Default, Sm, Lg }
 /** 侧栏状态：展开/收起 + 切换 */
 class MuiSidebarState(open: Boolean = true) {
     var open by mutableStateOf(open)
-        private set
-
-    /** 设置展开态 */
-    fun setOpen(value: Boolean) {
-        open = value
-    }
 
     /** 切换展开态 */
     fun toggle() {

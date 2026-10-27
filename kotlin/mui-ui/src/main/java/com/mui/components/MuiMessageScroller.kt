@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 // TODO: web 的滚到底浮动按钮（MessageScrollerButton）、滚动淡出遮罩、scrollbar 样式未移植。
@@ -17,11 +18,12 @@ import androidx.compose.ui.unit.dp
 /**
  * 消息滚动容器：LazyColumn 列表，数据变化自动滚到底（reverse 时滚到顶）。
  * 输入 itemCount + 列表项槽；输出自动跟随的滚动列表。
- * 硬约束：条目间距 32dp（web 的 gap-8）。
+ * 硬约束：条目间距默认 32dp（web 的 gap-8）；密排列表（日志）由调用点传更小的值。
  *
  * @param itemCount 条目数（变化时触发自动滚动）
  * @param modifier 布局修饰
  * @param reverseLayout 是否反向排布（新消息在顶部时置 true）
+ * @param itemSpacing 条目间距（web 的 gap-8 = 32px；日志这类密排传 0~2dp）
  * @param state 列表状态（调用方可自持以监听滚动）
  * @param contentPadding 内容内边距
  * @param content 列表项定义（LazyListScope：items / item）
@@ -31,6 +33,7 @@ fun MuiMessageScroller(
     itemCount: Int,
     modifier: Modifier = Modifier,
     reverseLayout: Boolean = false,
+    itemSpacing: Dp = 32.dp,
     state: LazyListState = rememberLazyListState(),
     contentPadding: PaddingValues = PaddingValues(0.dp),
     content: LazyListScope.() -> Unit,
@@ -46,7 +49,7 @@ fun MuiMessageScroller(
         modifier = modifier,
         reverseLayout = reverseLayout,
         contentPadding = contentPadding,
-        verticalArrangement = Arrangement.spacedBy(32.dp),
+        verticalArrangement = Arrangement.spacedBy(itemSpacing),
         content = content,
     )
 }

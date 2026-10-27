@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.mui.glass.GlassBody
 import com.mui.glass.GlassLens
+import com.mui.glass.glassCanvasPx
 import com.mui.glass.GlassShadowLevel
 import com.mui.glass.LensShape
 import com.mui.glass.paintPageBackdrop
@@ -174,16 +175,27 @@ fun MuiSlider(
                         }
                         .size(thumbWDp, thumbHDp)
                 ) {
+                    // 画布原点要按「取整后的实际位置」记账：thumb 盒的 offset 是整数像素，
+                    // dp→px 的余数全在球心与背面轨道里补回来（web 全程浮点，没有这一层损失）。
+                    val d = density.density
+                    val boxX = (thumbCenterX - THUMB_W * d / 2f).roundToInt()
+                    val m = (LENS_MARGIN * d).roundToInt()
+                    val originX = boxX - m
+                    val originY = -m
+                    val rootHpx = rootSize.height.toFloat()
                     GlassLens(
-                        modifier = Modifier
-                            .offset {
-                                IntOffset(-marginDp.roundToPx(), -marginDp.roundToPx())
-                            }
-                            .size(thumbWDp + marginDp * 2, thumbHDp + marginDp * 2),
+                        // 画布尺寸与偏移都用 px（与上面 originX/originY 同一套取整）：
+                        // dp 版对负偏移的 roundToPx 与正外扩量的取整不对称，会差 1px。
+                        modifier = Modifier.glassCanvasPx(
+                            widthPx = (THUMB_W * d).roundToInt() + m * 2,
+                            heightPx = (THUMB_H * d).roundToInt() + m * 2,
+                            offsetXPx = -m,
+                            offsetYPx = -m,
+                        ),
                         shapes = listOf(
                             LensShape(
-                                cx = LENS_MARGIN + THUMB_W / 2f,
-                                cy = LENS_MARGIN + THUMB_H / 2f,
+                                cx = (thumbCenterX - originX) / d,
+                                cy = (rootHpx / 2f - originY) / d,
                                 hw = THUMB_W / 2f,
                                 hh = THUMB_H / 2f,
                                 radius = THUMB_H / 2f,
@@ -198,11 +210,11 @@ fun MuiSlider(
                         lensCompress = 0.20f,
                         shadow = GlassShadowLevel.SM,
                     ) {
-                        // 背面：页面 + 轨道胶囊 + 已填充段（弧头，裁进轨道圆角内）
+                        // 背面：页面 + 轨道胶囊 + 已填充段（弧头，裁进轨道圆角内）。
+                        // 轨道位置 = 画布原点取整后的负值，跟真实轨道逐像素对齐。
                         paintPageBackdrop(resolvedPage)
-                        val trackTop = (thumbHDp.toPx() - trackH.toPx()) / 2f
-                        val canvasLeft = thumbCenterX - thumbWDp.toPx() / 2f - marginDp.toPx()
-                        val trackX = -canvasLeft
+                        val trackTop = (rootHpx - trackH.value * d) / 2f - originY
+                        val trackX = -originX.toFloat()
                         val trackColor = palette.muted
                         val fillStart = (((current.minOrNull() ?: min) - min) / (max - min)).coerceIn(0f, 1f) * trackW
                         val fillEnd = (((current.maxOrNull() ?: max) - min) / (max - min)).coerceIn(0f, 1f) * trackW

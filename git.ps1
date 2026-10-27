@@ -1,4 +1,4 @@
-﻿# git_tool.ps1 — Mui Git 自动化工具
+﻿# git.ps1 — Mui Git 自动化工具
 # 核心逻辑：交互菜单 + 命令行分发
 
 $Script:GitExe = $null

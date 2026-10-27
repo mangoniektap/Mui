@@ -359,9 +359,12 @@ const [open, setOpen] = useState(false)
     import:
       'import { Pagination, PaginationContent, PaginationEllipsis, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination"',
     summary:
-      "分页。页码、上一页 / 下一页与省略号；PaginationLink 传 href，isActive 标记当前页。",
+      "分页。默认「横放转盘」：给 currentPage / pageCount / onPageChange 且不传子节点即自动接管 —— 同屏最多 5 个页码、两侧缩小淡出、按住左右拖连续换页、松手甩动吸附；传子节点则回到自定义内容（页码钮 + 上一页 / 下一页 / 省略号）。",
     api: [
-      { name: "PaginationContent", type: "nav", desc: "分页容器" },
+      { name: "currentPage / pageCount / onPageChange", type: "number / number / (p: number) => void", desc: "转盘模式三件套；给齐且无子节点时启用" },
+      { name: "visiblePages", type: "number", default: "5", desc: "转盘模式同屏页码个数" },
+      { name: "dragStep", type: "number", default: "40", desc: "拖动多远算翻一页（px）" },
+      { name: "PaginationContent", type: "ul", desc: "自定义内容模式的容器" },
       { name: "PaginationLink", type: 'a & { href: string; isActive?: boolean }', desc: "页码链接；asChild 可接路由组件" },
       { name: "PaginationPrevious / PaginationNext", type: "a", desc: "上一页 / 下一页" },
       { name: "PaginationEllipsis", type: "span", desc: "省略号" },

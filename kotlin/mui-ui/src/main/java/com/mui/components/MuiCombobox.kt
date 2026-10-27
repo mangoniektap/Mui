@@ -37,10 +37,10 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import com.mui.theme.LocalIsDark
 import com.mui.theme.LocalMuiPalette
-import com.mui.token.MuiRadius
 import com.mui.theme.muiElevation
 import com.mui.theme.muiFocusRing
 import com.mui.theme.rememberMuiInteractionSource
+import com.mui.token.MuiRadius
 import kotlin.math.roundToInt
 
 /**
@@ -257,7 +257,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawComboboxCheck(c
 }
 
 /** 弹层定位：贴在锚点（输入框）正下方左对齐（web sideOffset 6）；放不下时翻到上方 */
-private class ComboboxPopupPosition(private val density: androidx.compose.ui.density.Density) : PopupPositionProvider {
+private class ComboboxPopupPosition(private val density: androidx.compose.ui.unit.Density) : PopupPositionProvider {
     override fun calculatePosition(
         anchorBounds: androidx.compose.ui.unit.IntRect,
         windowSize: androidx.compose.ui.unit.IntSize,

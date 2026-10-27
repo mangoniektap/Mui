@@ -4,15 +4,19 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -25,15 +29,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import com.mui.icon.MuiIcons
 import com.mui.theme.LocalIsDark
 import com.mui.theme.LocalMuiPalette
-import com.mui.theme.MuiRadius
+import com.mui.token.MuiRadius
 import com.mui.theme.muiElevation
 import com.mui.theme.muiFocusRing
 import com.mui.theme.rememberMuiInteractionSource
@@ -107,6 +115,7 @@ fun MuiSelect(
     val triggerShape = shape
     val borderColor = if (invalid) palette.destructive else palette.input
     var triggerHeightPx by remember { mutableStateOf(0) }
+    var triggerWidthPx by remember { mutableStateOf(0) }
 
     Box(modifier = modifier) {
         // 触发器
@@ -114,7 +123,10 @@ fun MuiSelect(
             Modifier
                 .alpha(if (disabled) 0.5f else 1f)
                 .height(h)
-                .onSizeChanged { triggerHeightPx = it.height }
+                .onSizeChanged {
+                    triggerHeightPx = it.height
+                    triggerWidthPx = it.width
+                }
                 .clip(triggerShape)
                 .background(
                     if (isDark) {
@@ -135,38 +147,31 @@ fun MuiSelect(
                 .padding(horizontal = 12.dp),
             contentAlignment = Alignment.CenterStart,
         ) {
+            // web：`flex w-fit items-center justify-between gap-2` —— 触发器宽度跟着内容走。
+            // 这里**不能**给 fillMaxWidth：Row 一旦撑满，外层的 max 约束（调用点的 widthIn）
+            // 就成了触发器宽度，下拉框会横向占满整行。
             Row(
-                Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 val label = current?.label ?: placeholder
                 MuiText(
                     text = label ?: "—",
                     fontSize = 14.sp,
                     lineHeight = 20.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     color = if (current == null && placeholder != null) palette.mutedForeground else palette.foreground,
                 )
-                // 下箭头（size-4 opacity-50）
-                androidx.compose.foundation.Canvas(Modifier.size(16.dp)) {
-                    val w = size.width
-                    val hpx = size.height
-                    val stroke = 1.5.dp.toPx()
-                    drawLine(
+                // 下箭头：lucide ChevronDown（size-4 opacity-50），与 web 同一张图
+                androidx.compose.foundation.Image(
+                    painter = androidx.compose.ui.graphics.vector.rememberVectorPainter(MuiIcons.ChevronDown),
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(
                         palette.mutedForeground.copy(alpha = 0.5f),
-                        Offset(stroke, hpx * 0.35f),
-                        Offset(w / 2f, hpx * 0.65f),
-                        strokeWidth = stroke,
-                        cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                    )
-                    drawLine(
-                        palette.mutedForeground.copy(alpha = 0.5f),
-                        Offset(w / 2f, hpx * 0.65f),
-                        Offset(w - stroke, hpx * 0.35f),
-                        strokeWidth = stroke,
-                        cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                    )
-                }
+                    ),
+                )
             }
         }
 
@@ -179,8 +184,16 @@ fun MuiSelect(
                 properties = PopupProperties(focusable = true, dismissOnBackPress = true, dismissOnClickOutside = true),
                 onDismissRequest = { setOpen(false) },
             ) {
+                // web：浮层宽度 = max(内容宽, 触发器宽, min-w-[8rem])，高度上限 320dp。
+                // Compose 没有「宽度 = 最宽子项」，用 IntrinsicSize.Max 顶替（fillMaxWidth 会
+                // 把 Column 撑到窗口宽，浮层就变成整屏一条）。
+                val minW = with(LocalDensity.current) {
+                    maxOf(128.dp, triggerWidthPx.toDp())
+                }
                 Column(
                     Modifier
+                        .width(IntrinsicSize.Max)
+                        .widthIn(min = minW)
                         .heightIn(min = 36.dp, max = 320.dp)
                         .background(palette.popover, popupShape)
                         .border(1.dp, palette.border, popupShape)
@@ -201,45 +214,37 @@ fun MuiSelect(
                         } else if (option.group == null) {
                             lastGroup = null
                         }
+                        val itemInteraction = remember { MutableInteractionSource() }
+                        val pressed by itemInteraction.collectIsPressedAsState()
                         Row(
                             Modifier
                                 .alpha(if (option.disabled) 0.5f else 1f)
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(MuiRadius.sm))
+                                // web 只有 focus/hover 才铺 accent 底，选中态只靠右侧 ✓ 表达
                                 .background(
-                                    if (option.value == selectedValue) palette.accent else androidx.compose.ui.graphics.Color.Transparent,
+                                    if (pressed) palette.accent else androidx.compose.ui.graphics.Color.Transparent,
                                     RoundedCornerShape(MuiRadius.sm),
                                 )
                                 .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
+                                    interactionSource = itemInteraction,
                                     indication = null,
                                     enabled = !option.disabled,
                                 ) { pick(option) }
                                 .padding(start = 8.dp, end = 32.dp, top = 6.dp, bottom = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
+                            // web 的 ✓ 是 absolute right-2：贴着条目右缘，与文字长短无关
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
                             MuiText(text = option.label, fontSize = 14.sp, lineHeight = 20.sp)
                             if (option.value == selectedValue) {
-                                // 选中 ✓（画在右侧 pr-8 的位置）
-                                androidx.compose.foundation.Canvas(Modifier.size(16.dp)) {
-                                    val w = size.width
-                                    val stroke = 2.dp.toPx()
-                                    drawLine(
-                                        palette.accentForeground,
-                                        Offset(w * 0.15f, w * 0.55f),
-                                        Offset(w * 0.4f, w * 0.8f),
-                                        strokeWidth = stroke,
-                                        cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                                    )
-                                    drawLine(
-                                        palette.accentForeground,
-                                        Offset(w * 0.4f, w * 0.8f),
-                                        Offset(w * 0.85f, w * 0.25f),
-                                        strokeWidth = stroke,
-                                        cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                                    )
-                                }
+                                // 选中 ✓：lucide Check（size-4），右缘 pr-8 的位置由 padding 给出
+                                androidx.compose.foundation.Image(
+                                    painter = androidx.compose.ui.graphics.vector.rememberVectorPainter(MuiIcons.Check),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(palette.foreground),
+                                )
                             }
                         }
                     }

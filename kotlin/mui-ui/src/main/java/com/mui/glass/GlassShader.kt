@@ -92,7 +92,9 @@ uniform float uMotionAmp;
 uniform float uDpr;
 uniform float uFill;
 uniform float uAlpha;
-uniform half4 uShadowColor;
+// 必须是 layout(color)：Kotlin 侧用 setColorUniform 传 ARGB，
+// 少了这个修饰符运行时会抛「attempting to set a color uniform using the non-color specific APIs」。
+layout(color) uniform vec4 uShadowColor;
 uniform float2 uShadowOffset;
 uniform float uShadowBlur;
 
@@ -110,8 +112,11 @@ float2 sdfNormal(float2 p, float2 h, float r) {
 
 half4 main(float2 fragCoord) {
     float2 p = float2(fragCoord.x, fragCoord.y);
-    float2 uv = p / uRes;
-    half4 texel = uTex.eval(uv);
+    /* ⚠️ uTex.eval() 收的是**像素坐标**，不是 0..1 的 uv。
+       web 版是 texture2D(sampler, uv)，GLSL 的 sampler 才吃归一化 uv；
+       AGSL 的输入 shader 用自己的像素坐标系 —— 传 uv 进来等于整屏只采左上角一个像素
+       （折射/色散都会变成"什么都没有"，因为整张图是单色）。 */
+    half4 texel = uTex.eval(p);
     float3 col = float3(texel.r, texel.g, texel.b);
 
     float a = 0.0;
@@ -123,8 +128,8 @@ half4 main(float2 fragCoord) {
         float2 vv = v;
         if (abs(uMotionAmp) > 0.0005) {
             vv = v * mix(
-                float2(1.0 / (1.0 + uMotionAmp)),
                 float2(1.0 + uMotionAmp),
+                float2(1.0 / (1.0 + uMotionAmp)),
                 uMotionAxis
             );
         }
@@ -161,9 +166,9 @@ half4 main(float2 fragCoord) {
             tapR -= n * max(sdRoundRect(tapR, hv, br), 0.0) * w;
             tapB -= n * max(sdRoundRect(tapB, hv, br), 0.0) * w;
             float3 sc;
-            sc.r = uTex.eval((uCenter[i] + tapR) / uRes).r;
-            sc.g = uTex.eval((uCenter[i] + q) / uRes).g;
-            sc.b = uTex.eval((uCenter[i] + tapB) / uRes).b;
+            sc.r = uTex.eval(uCenter[i] + tapR).r;
+            sc.g = uTex.eval(uCenter[i] + q).g;
+            sc.b = uTex.eval(uCenter[i] + tapB).b;
 
             float vt = clamp((vv.y + bh) / max(2.0 * bh, 0.001), 0.0, 1.0);
             float pk = clamp(uBodyPeak, 0.05, 0.95);

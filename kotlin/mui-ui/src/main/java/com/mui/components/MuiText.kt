@@ -2,6 +2,7 @@ package com.mui.components
 
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -15,6 +16,9 @@ import com.mui.token.MuiTypography
 import com.mui.theme.LocalMuiContentColor
 import com.mui.theme.LocalMuiPalette
 
+/** 容器继承给 MuiText 的默认文字样式；显式参数优先。 */
+internal val LocalMuiTextStyle = staticCompositionLocalOf { TextStyle.Default }
+
 /**
  * Mui 文本基元：全库文本统一入口（BasicText 封装）。
  *
@@ -23,7 +27,8 @@ import com.mui.theme.LocalMuiPalette
  * @param fontSize 字号（Unspecified = TextStyle 决定）
  * @param fontWeight 字重（null = 常规）
  * @param fontFamily 字体族（默认 sans）
- * @param lineHeight 行高（Unspecified = 随字号）
+ * @param lineHeight 行高
+ * @param letterSpacing 字距（Unspecified = 随字号）
  * @param maxLines 最大行数（默认不限）
  * @param overflow 溢出处理（默认裁剪）
  * @param textAlign 对齐方式（null = 起点对齐）
@@ -38,6 +43,7 @@ fun MuiText(
     fontWeight: FontWeight? = null,
     fontFamily: FontFamily? = MuiTypography.sans,
     lineHeight: TextUnit = TextUnit.Unspecified,
+    letterSpacing: TextUnit = TextUnit.Unspecified,
     maxLines: Int = Int.MAX_VALUE,
     overflow: TextOverflow = TextOverflow.Clip,
     textAlign: TextAlign? = null,
@@ -52,15 +58,18 @@ fun MuiText(
     BasicText(
         text = text,
         modifier = modifier,
-        style = TextStyle(
-            color = effectiveColor,
-            fontSize = fontSize,
-            fontWeight = fontWeight,
-            fontFamily = fontFamily,
-            lineHeight = lineHeight,
-            textAlign = textAlign,
-            textDecoration = textDecoration,
-        ),
+        style = LocalMuiTextStyle.current.merge(
+            TextStyle(
+                    color = effectiveColor,
+                    fontSize = fontSize,
+                    fontWeight = fontWeight,
+                    fontFamily = fontFamily,
+                    lineHeight = lineHeight,
+                    letterSpacing = letterSpacing,
+                    textAlign = textAlign ?: TextAlign.Unspecified,
+                    textDecoration = textDecoration,
+                ),
+            ),
         maxLines = maxLines,
         overflow = overflow,
     )

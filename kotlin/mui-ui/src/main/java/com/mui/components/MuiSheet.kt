@@ -1,8 +1,8 @@
 package com.mui.components
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.EnterTransition
-import androidx.compose.animation.core.ExitTransition
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally

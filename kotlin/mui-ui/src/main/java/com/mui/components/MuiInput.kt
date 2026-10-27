@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -39,6 +40,7 @@ import com.mui.theme.rememberMuiInteractionSource
  * @param placeholder 占位文本（null = 无）
  * @param visualTransformation 文本变换（密码等，默认原样）
  * @param singleLine 是否单行（默认 true）
+ * @param keyboardOptions 键盘类型/输入法动作（数字键盘等；web 侧对应 inputMode / type）
  * @param interactionSource 交互源
  * @param decorationBoxSuffix 输入区右侧附加内容槽位（图标等，紧跟文本）
  */
@@ -52,6 +54,7 @@ fun MuiInput(
     placeholder: String? = null,
     visualTransformation: VisualTransformation = VisualTransformation.None,
     singleLine: Boolean = true,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     interactionSource: MutableInteractionSource = rememberMuiInteractionSource(),
     content: @Composable () -> Unit = {},
 ) {
@@ -81,6 +84,7 @@ fun MuiInput(
             modifier = Modifier.fillMaxWidth(),
             enabled = enabled,
             singleLine = singleLine,
+            keyboardOptions = keyboardOptions,
             textStyle = TextStyle(
                 fontSize = 14.sp,
                 lineHeight = 20.sp,

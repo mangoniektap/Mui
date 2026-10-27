@@ -310,33 +310,45 @@ export function NavigationMenuSection() {
 }
 
 export function PaginationSection() {
+  // 页码 0 起；转盘模式下拖动 / 甩动 / 点页码都走 onPageChange
+  const [page, setPage] = useState(0);
+  const count = 12;
   return (
-    <Demo title="分页" hint="Pagination" layout="col">
-      <Pagination>
-        <PaginationContent>
-          <PaginationItem>
-            <PaginationPrevious href="#" />
-          </PaginationItem>
-          <PaginationItem>
-            <PaginationLink href="#">1</PaginationLink>
-          </PaginationItem>
-          <PaginationItem>
-            <PaginationLink href="#" isActive>
-              2
-            </PaginationLink>
-          </PaginationItem>
-          <PaginationItem>
-            <PaginationLink href="#">3</PaginationLink>
-          </PaginationItem>
-          <PaginationItem>
-            <PaginationEllipsis />
-          </PaginationItem>
-          <PaginationItem>
-            <PaginationNext href="#" />
-          </PaginationItem>
-        </PaginationContent>
-      </Pagination>
-    </Demo>
+    <>
+      <Demo title="分页（横放转盘）" hint="Pagination · 拖动换页" layout="col">
+        <Pagination currentPage={page} pageCount={count} onPageChange={setPage} />
+        <p className="text-[12px] text-muted-foreground">
+          第 {page + 1} / {count} 页 · 按住页码左右拖，松手吸附
+        </p>
+      </Demo>
+
+      <Demo title="分页（自定义内容）" hint="Pagination + PaginationContent" layout="col">
+        <Pagination>
+          <PaginationContent>
+            <PaginationItem>
+              <PaginationPrevious href="#" />
+            </PaginationItem>
+            <PaginationItem>
+              <PaginationLink href="#">1</PaginationLink>
+            </PaginationItem>
+            <PaginationItem>
+              <PaginationLink href="#" isActive>
+                2
+              </PaginationLink>
+            </PaginationItem>
+            <PaginationItem>
+              <PaginationLink href="#">3</PaginationLink>
+            </PaginationItem>
+            <PaginationItem>
+              <PaginationEllipsis />
+            </PaginationItem>
+            <PaginationItem>
+              <PaginationNext href="#" />
+            </PaginationItem>
+          </PaginationContent>
+        </Pagination>
+      </Demo>
+    </>
   );
 }
 

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
@@ -21,6 +22,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -46,6 +48,8 @@ import com.mui.theme.rememberMuiInteractionSource
  * @param invalid 校验失败态：边框与聚焦环转 destructive
  * @param placeholder 占位文本（null = 无）
  * @param visualTransformation 文本变换（密码等，默认原样）
+ * @param textAlign 输入区文字对齐（web 侧 `className="text-center"`；步进器的数字居中用它）
+ * @param keyboardOptions 键盘类型/输入法动作（数字键盘等）
  * @param startAddon 前置槽（图标/文本，null = 无；自带左内边距 12dp）
  * @param endAddon 后置槽（图标/按钮，null = 无；自带右内边距 12dp）
  * @param interactionSource 交互源（输入框与容器共用，聚焦环出口）
@@ -59,6 +63,8 @@ fun MuiInputGroup(
     invalid: Boolean = false,
     placeholder: String? = null,
     visualTransformation: VisualTransformation = VisualTransformation.None,
+    textAlign: TextAlign = TextAlign.Start,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     startAddon: (@Composable RowScope.() -> Unit)? = null,
     endAddon: (@Composable RowScope.() -> Unit)? = null,
     interactionSource: MutableInteractionSource = rememberMuiInteractionSource(),
@@ -99,7 +105,13 @@ fun MuiInputGroup(
                 modifier = Modifier.fillMaxWidth(),
                 enabled = enabled,
                 singleLine = true,
-                textStyle = TextStyle(fontSize = 14.sp, lineHeight = 20.sp, color = palette.foreground),
+                keyboardOptions = keyboardOptions,
+                textStyle = TextStyle(
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp,
+                    color = palette.foreground,
+                    textAlign = textAlign,
+                ),
                 cursorBrush = SolidColor(palette.primary),
                 visualTransformation = visualTransformation,
                 interactionSource = interactionSource,

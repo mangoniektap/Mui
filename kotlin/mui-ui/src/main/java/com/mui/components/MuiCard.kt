@@ -67,8 +67,8 @@ fun MuiCardHeader(
 /** 卡片标题：font-semibold leading-none */
 @Composable
 fun MuiCardTitle(
-    modifier: Modifier = Modifier,
     text: String,
+    modifier: Modifier = Modifier,
 ) {
     MuiText(
         text = text,
@@ -80,8 +80,8 @@ fun MuiCardTitle(
 /** 卡片描述：text-sm muted-foreground */
 @Composable
 fun MuiCardDescription(
-    modifier: Modifier = Modifier,
     text: String,
+    modifier: Modifier = Modifier,
 ) {
     MuiText(
         text = text,

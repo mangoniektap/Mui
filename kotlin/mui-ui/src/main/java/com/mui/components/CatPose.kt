@@ -51,7 +51,7 @@ data class MibuPhase(
 )
 
 /** 姿态逼近速率（1/秒）：约 0.3 秒走完九成路程 */
-private const val POSE_RATE = 7.5
+private const val POSE_RATE = 7.5f
 
 private val TAU = PI * 2
 
@@ -81,8 +81,10 @@ fun mibuStillPose(pose: MibuPose): MibuPose =
     pose.copy(breathAmp = 0f, armAmp = 0f, tailAmp = 0f, hopAmp = 0f, blinkHz = 0f)
 
 /** 帧率无关的指数逼近：不越目标、不回弹 */
-private fun approach(current: Float, target: Float, dt: Float, rate: Float = POSE_RATE): Float =
-    current + (target - current) * (1f - exp(-rate * dt))
+private fun approach(current: Float, target: Float, dt: Float, rate: Float = POSE_RATE): Float {
+    val k: Float = 1f - exp((-rate * dt).toDouble()).toFloat()
+    return current + (target - current) * k
+}
 
 /** 把整组姿态朝目标推进一步 */
 fun approachPose(current: MibuPose, target: MibuPose, dt: Float): MibuPose = MibuPose(

@@ -6,14 +6,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.unit.dp
 import com.mui.token.MuiElevation
 import com.mui.token.MuiShadowSpec
 
@@ -42,35 +48,53 @@ fun Modifier.muiElevation(level: String, shape: Shape): Modifier = composed {
     drawBehind {
         if (specs.isEmpty()) return@drawBehind
         val outline = shape.createOutline(size, layoutDirection, this)
-        val rect = when (outline) {
-            is Outline.Rounded -> outline.roundRect
+        val rect: Rect = when (outline) {
+            is Outline.Rounded -> Rect(
+                outline.roundRect.left, outline.roundRect.top,
+                outline.roundRect.right, outline.roundRect.bottom,
+            )
             is Outline.Rectangle -> outline.rect
             else -> return@drawBehind
         }
         val radius = when (outline) {
-            is Outline.Rounded -> outline.roundRect.cornerRadius.x
+            is Outline.Rounded -> outline.roundRect.topLeftCornerRadius.x
             else -> 0f
         }
-        drawIntoCanvas { canvas ->
-            val paint = Paint()
-            for (spec in specs) {
-                paint.color = spec.color
-                paint.asFrameworkPaint().maskFilter = if (spec.blur > 0f) {
-                    android.graphics.BlurMaskFilter(
-                        spec.blur.toPx(),
-                        android.graphics.BlurMaskFilter.Blur.NORMAL,
+        val paintShadows: DrawScope.() -> Unit = {
+            drawIntoCanvas { canvas ->
+                val paint = Paint()
+                for (spec in specs) {
+                    paint.color = spec.color
+                    paint.asFrameworkPaint().maskFilter = if (spec.blur > 0.dp) {
+                        android.graphics.BlurMaskFilter(
+                            spec.blur.toPx(),
+                            android.graphics.BlurMaskFilter.Blur.NORMAL,
+                        )
+                    } else null
+                    canvas.nativeCanvas.drawRoundRect(
+                        rect.left + spec.dx.toPx(),
+                        rect.top + spec.dy.toPx(),
+                        rect.right + spec.dx.toPx(),
+                        rect.bottom + spec.dy.toPx(),
+                        radius,
+                        radius,
+                        paint.asFrameworkPaint(),
                     )
-                } else null
-                canvas.nativeCanvas.drawRoundRect(
-                    rect.left + spec.dx.toPx(),
-                    rect.top + spec.dy.toPx(),
-                    rect.right + spec.dx.toPx(),
-                    rect.bottom + spec.dy.toPx(),
-                    radius,
-                    radius,
-                    paint.asFrameworkPaint(),
-                )
+                }
             }
+        }
+        // 只画在形状「外部」：CSS 的 box-shadow 是不覆盖元素自身背景的，
+        // 而这里如果直接画实心圆角矩形，就会把整块元素压暗
+        // （实测：白底 MuiCard 被 sm 的两层 10% 黑压成 #CECECE）。
+        val shapePath: Path? = when (outline) {
+            is Outline.Rounded -> Path().apply { addRoundRect(outline.roundRect) }
+            is Outline.Rectangle -> Path().apply { addRect(outline.rect) }
+            else -> null
+        }
+        if (shapePath != null) {
+            clipPath(shapePath, ClipOp.Difference, paintShadows)
+        } else {
+            paintShadows()
         }
     }
 }

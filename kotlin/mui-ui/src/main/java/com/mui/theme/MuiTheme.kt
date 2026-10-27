@@ -40,6 +40,9 @@ fun MuiTheme(
         LocalMuiPalette provides palette,
         LocalGlassPalette provides glass,
         LocalIsDark provides darkTheme,
+        // 玻璃的「背面」默认就是页面底色。少了这一行，玻璃的 backdrop 画的是
+        // Color.Unspecified（= 什么都不画），整块玻璃在视觉上等于不存在。
+        LocalMuiPageColor provides palette.background,
         content = content,
     )
 }
