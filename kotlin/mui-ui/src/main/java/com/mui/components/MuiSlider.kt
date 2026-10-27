@@ -14,6 +14,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
@@ -79,9 +80,15 @@ fun MuiSlider(
     var rootSize by remember { mutableStateOf(IntSize.Zero) }
     var pressedIndex by remember { mutableStateOf(-1) }
 
+    // 同 ToggleGroup：pointerInput 的手势协程捕获的是启动那次组合的快照，
+    // 受控值 / 回调 / 当前值都要走 rememberUpdatedState 读最新值。
+    val latestValues by rememberUpdatedState(values)
+    val latestOnValueChange by rememberUpdatedState(onValueChange)
+    val latestCurrent by rememberUpdatedState(current)
+
     fun commit(next: List<Float>) {
-        if (values == null) inner = next
-        onValueChange?.invoke(next)
+        if (latestValues == null) inner = next
+        latestOnValueChange?.invoke(next)
     }
 
     val trackH = 8.dp
@@ -105,7 +112,7 @@ fun MuiSlider(
                     val downVal = min + frac * (max - min)
                     var idx = 0
                     var best = Float.MAX_VALUE
-                    current.forEachIndexed { i, v ->
+                    latestCurrent.forEachIndexed { i, v ->
                         val d = abs(v - downVal)
                         if (d < best) {
                             best = d
@@ -120,7 +127,7 @@ fun MuiSlider(
                             val f = (change.position.x / trackW).coerceIn(0f, 1f)
                             var v = min + f * (max - min)
                             // 双 thumb 时互相推挤，不越过对方
-                            val nextList = current.toMutableList()
+                            val nextList = latestCurrent.toMutableList()
                             if (thumbCount == 2) {
                                 if (idx == 0) v = v.coerceAtMost(nextList[1])
                                 else v = v.coerceAtLeast(nextList[0])

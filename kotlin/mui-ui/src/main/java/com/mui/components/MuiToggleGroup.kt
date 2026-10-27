@@ -25,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -204,9 +205,17 @@ private fun SegmentedToggleGroup(
         }
     }
 
+    // 手势协程是长命的：pointerInput 的 key 只含 items.size/disabled/segs.size，块里捕获的是
+    // 「启动那次组合」的快照。选中值 / 回调 / 条目随后都会变，必须经 rememberUpdatedState
+    // 读最新值——否则按下判重用旧选中值，该提交的被跳过，玻璃要等松手（click 提交）才滑过去。
+    val latestItems by rememberUpdatedState(items)
+    val latestValue by rememberUpdatedState(value)
+    val latestOnValueChange by rememberUpdatedState(onValueChange)
+    val latestCurrent by rememberUpdatedState(current)
+
     fun commit(next: String) {
-        if (value == null) inner = next
-        onValueChange?.invoke(next)
+        if (latestValue == null) inner = next
+        latestOnValueChange?.invoke(next)
     }
 
     // 段盒子位置：逐段 onGloballyPositioned 量（相对 root）
@@ -225,7 +234,7 @@ private fun SegmentedToggleGroup(
     }
 
     fun commitAt(index: Int) {
-        items.getOrNull(index)?.let { commit(it.value) }
+        latestItems.getOrNull(index)?.let { commit(it.value) }
     }
 
     val baseShape = RoundedCornerShape(50)
@@ -260,7 +269,7 @@ private fun SegmentedToggleGroup(
                     dragging = false
                     dragX = 0f
                     var moved = false
-                    if (items.getOrNull(segIdx)?.value != current) {
+                    if (latestItems.getOrNull(segIdx)?.value != latestCurrent) {
                         commitAt(segIdx)
                     }
                     try {

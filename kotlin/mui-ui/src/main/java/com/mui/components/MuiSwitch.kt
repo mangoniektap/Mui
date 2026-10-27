@@ -20,6 +20,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -141,9 +142,15 @@ fun MuiSwitch(
         palette.background
     }
 
+    // 同 ToggleGroup：pointerInput(disabled) 的手势协程捕获的是启动那次组合的快照，
+    // checked / 回调 / 当前态都要走 rememberUpdatedState 读最新值。
+    val latestChecked by rememberUpdatedState(checked)
+    val latestOnCheckedChange by rememberUpdatedState(onCheckedChange)
+    val latestIsChecked by rememberUpdatedState(isChecked)
+
     fun commit(next: Boolean) {
-        if (checked == null) inner = next
-        onCheckedChange?.invoke(next)
+        if (latestChecked == null) inner = next
+        latestOnCheckedChange?.invoke(next)
     }
 
     val capsuleShape = RoundedCornerShape(thumbH / 2)
@@ -171,7 +178,7 @@ fun MuiSwitch(
                             if (!moved && abs(dx) > DRAG_THRESHOLD_DP.dp.toPx()) {
                                 moved = true
                                 dragging = true
-                                scope.launch { animX.snapTo(clampedX) }
+                                scope.launch { animX.snapTo(((if (latestIsChecked) travel else 0f) + dragX).coerceIn(0f, travel)) }
                             }
                             if (moved) {
                                 dragX = dx
@@ -185,9 +192,9 @@ fun MuiSwitch(
                         dragging = false
                         dragX = 0f
                         if (moved) {
-                            commit((if (isChecked) travel else 0f) + dx > travel / 2f)
+                            commit((if (latestIsChecked) travel else 0f) + dx > travel / 2f)
                         } else {
-                            commit(!isChecked)
+                            commit(!latestIsChecked)
                         }
                     }
                 }

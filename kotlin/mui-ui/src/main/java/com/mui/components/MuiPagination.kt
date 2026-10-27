@@ -38,6 +38,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -54,7 +55,6 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
 // TODO: web 的 Previous/Next 覆盖 px-2.5（按钮默认 px-4）未移植，沿用 MuiButton 默认内边距
-// TODO: web 的 sm: 断点文字显隐（小屏隐藏 Previous/Next 文字）未移植
 
 /**
  * 分页。两种形态：
@@ -190,6 +190,19 @@ private const val PAGER_H = 36f
 
 /** 转盘模式同时显示的页码个数 */
 private const val PAGER_VISIBLE = 5
+
+/**
+ * 窗口宽度断点（dp）：小于它算「窄屏」，上一页/下一页只显示箭头、不显示文字。
+ * 对齐 web 的 `sm:`（640px）断点——手机上带文字的 Previous/Next 会把分页条撑爆。
+ */
+private const val COMPACT_WINDOW_MAX_DP = 640
+
+/** 当前窗口是否窄屏（取不到 Configuration 时按宽屏算，保守显示文字）。 */
+@Composable
+private fun isCompactWindow(): Boolean {
+    val widthDp = LocalConfiguration.current?.screenWidthDp ?: Int.MAX_VALUE
+    return widthDp < COMPACT_WINDOW_MAX_DP
+}
 
 /** 吸附动画时长（ms）：两端同一条手感 */
 private const val SNAP_MS = 190
@@ -399,6 +412,9 @@ fun MuiPaginationLink(
 /**
  * 上一页钮：ghost/outline + 左 chevron + "Previous" 文字。
  *
+ * 窄屏（窗口 < [COMPACT_WINDOW_MAX_DP] dp）时隐藏文字，只留 chevron——
+ * 对齐 web 的 `sm:` 断点行为。
+ *
  * @param onClick 点击回调
  * @param modifier 布局修饰
  * @param isActive 是否当前页
@@ -419,12 +435,14 @@ fun MuiPaginationPrevious(
         enabled = enabled,
     ) {
         MuiPaginationIcon(MuiIcons.ChevronLeft)
-        MuiText(text = "Previous")
+        if (!isCompactWindow()) MuiText(text = "Previous")
     }
 }
 
 /**
  * 下一页钮：ghost/outline + "Next" 文字 + 右 chevron。
+ *
+ * 窄屏（窗口 < [COMPACT_WINDOW_MAX_DP] dp）时隐藏文字，只留 chevron。
  *
  * @param onClick 点击回调
  * @param modifier 布局修饰
@@ -445,7 +463,7 @@ fun MuiPaginationNext(
         size = ButtonSize.Default,
         enabled = enabled,
     ) {
-        MuiText(text = "Next")
+        if (!isCompactWindow()) MuiText(text = "Next")
         MuiPaginationIcon(MuiIcons.ChevronRight)
     }
 }
