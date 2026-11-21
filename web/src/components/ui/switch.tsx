@@ -19,7 +19,8 @@ import { GlassLens, paintPageBackdrop } from "@/styles/surfaces/liquid-glass"
 const DRAG_THRESHOLD = 3
 
 /** 透镜画布比球外扩的边距：容纳按压外鼓，否则鼓出部分被画布裁掉 */
-const LENS_MARGIN = 6
+/** 画布外扩：外鼓 0.3×短边 + 惯性应变放大都要装得下 */
+const LENS_MARGIN = 10
 
 /** thumb 与轨道四周各留的缝：露出一道淡边，四边等粗 */
 const TRACK_INSET = 1.5
@@ -195,11 +196,11 @@ function Switch({
         data-slot="switch-thumb"
         style={thumbStyle}
         // 球是小件：斜面比例要比卡牌窄，否则 bevel 占到半径一半，边缘糊成一圈
-        className="[--glass-lens-band:0.3] pointer-events-none relative block rounded-full transition-[translate] duration-[var(--glass-press-duration)] ease-out"
+        className="[--glass-lens-band:0.3] [--glass-lens-decay:0.35] pointer-events-none relative block rounded-full transition-[translate] duration-[var(--glass-press-duration)] ease-out"
       >
         <GlassLens
           live
-          motion={5} // 水滴惯性：加速度驱动，起步甩长、急停挤扁后回弹
+          motion={5} // 水滴惯性：带通位移驱动，起步甩长、急停挤扁后一阶回 0
           body={pressed ? "transparent" : "jade"}
           pressed={pressed}
           shapes={[

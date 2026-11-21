@@ -38,107 +38,105 @@ git commit -m "feat: 说明改了什么"     # 本地记账
 git push origin main                  # 推到 GitHub，消费方才拉得到
 ```
 
-#### 使用时拉取代码
+#### 登记子模块
+
+在接入项目的 Git 根目录执行一次。将本仓库的 [同步脚本](integrations/sync-mui.sh) 保存为接入项目的 `scripts/sync-mui.sh`，并随项目提交。Windows 使用 Git for Windows 随附的 shell。
 
 ```bash
-# ============ Android 工程 ============
-git submodule add --depth 1 <https://github.com/mangoniektap/Mui.git> libs/mui    # 挂子模块，只拉最新一层历史
-git -C libs/mui sparse-checkout init --cone         # 开启按目录过滤
-git -C libs/mui sparse-checkout set kotlin          # 只摊开 kotlin/，web/ 与 tools/ 收起
-
-git submodule update --remote libs/mui              # 更新：拉组件库最新版本
-git -C libs/mui sparse-checkout set kotlin          # 更新后重套过滤
-
-# ============ Web 工程 ============
-git submodule add --depth 1 <https://github.com/mangoniektap/Mui.git> libs/mui    # 挂子模块，只拉最新一层历史
-git -C libs/mui sparse-checkout init --cone         # 开启按目录过滤
-git -C libs/mui sparse-checkout set web/src         # 只摊开 web/src/，kotlin/ 与 tools/ 收起
-
-git submodule update --remote libs/mui              # 更新：拉组件库最新版本
-git -C libs/mui sparse-checkout set web/src         # 更新后重套过滤
+git submodule add -b main https://github.com/mangoniektap/Mui.git libs/mui
+git -C libs/mui checkout --detach
+git add .gitmodules libs/mui scripts/sync-mui.sh .gitattributes
 ```
 
-### 如何使用
+在接入项目的 `.gitattributes` 中添加 `scripts/sync-mui.sh text eol=lf`。已接入的项目可以沿用现有子模块路径 `libs/mui`。旧配置如果使用了 sparse checkout 或浅克隆，请执行 `git -C libs/mui sparse-checkout disable`，并仅在浅克隆时执行 `git -C libs/mui fetch --unshallow origin`。
 
-#### KT侧
+构建会自动初始化普通克隆中尚未检出的子模块，使用 Git SHA 检查 `origin/main`，有更新时快进到新提交。脚本会显示实际使用的 SHA。子模块含本地改动、检出开发分支、提交无法快进或 Git 操作失败时，构建会报错。需要记录已验证的版本时，执行 `git add libs/mui` 并提交。发布到 Mui 的 `main` 前，请验证 Web 和 Android 构建，以便接入项目直接使用最新提交。
 
-`settings.gradle.kts`（放在 `include(":app")` 之后）：
+### Android 接入
+
+让 `ANDROID_HOME` 指向安装了 Mui 所需 compileSdk 的 Android SDK，供接入项目和包含构建使用。
+
+将下方代码添加到接入项目的 `settings.gradle.kts`。放在 `pluginManagement` 和 `plugins` 块之后、引用 Mui 的位置之前。Android Studio 和 Gradle 命令行共用这个设置。
 
 ```kotlin
-includeBuild("libs/mui/kotlin") {        // 指向子模块里的 kotlin 目录
+val muiSync = providers.exec {
+    workingDir(settingsDir)
+    commandLine("git", "-c", "alias.mui-sync=!sh ./scripts/sync-mui.sh", "mui-sync", "android")
+    isIgnoreExitValue = true
+}
+val muiRevision = muiSync.standardOutput.asText.get().trim()
+if (muiSync.result.get().exitValue != 0) {
+    throw GradleException(muiSync.standardError.asText.get().trim())
+}
+println("[Mui] $muiRevision")
+
+includeBuild("libs/mui/kotlin") {
     dependencySubstitution {
         substitute(module("com.mui:mui-ui")).using(project(":mui-ui"))
     }
-}   // 把对外部坐标 com.mui:mui-ui 的依赖请求，换成编译 libs/mui/kotlin 这个源码工程。
-```
-
-`app/build.gradle.kts`：
-
-```kotlin
-dependencies {
-    implementation("com.mui:mui-ui:0.1.0")   // 版本号随便写，会被上面的 substitution 替换掉
 }
 ```
 
-#### React侧
+在应用模块的 `build.gradle.kts` 中添加依赖。
 
-`vite.config.ts`（精确匹配放前面，catch-all `@` 放最后）：
+```kotlin
+dependencies {
+    implementation("com.mui:mui-ui:0.1.0")
+}
+```
+
+### Web 接入
+
+在接入项目的 `package.json` 中配置构建钩子。
+
+```json
+{
+  "scripts": {
+    "mui:sync": "git -c \"alias.mui-sync=!sh ./scripts/sync-mui.sh\" mui-sync web",
+    "predev": "npm run mui:sync",
+    "dev": "vite",
+    "prebuild": "npm run mui:sync",
+    "build": "tsc && vite build"
+  }
+}
+```
+
+首次运行或 Mui 的 npm 依赖配置更新时，脚本执行 `npm ci` 安装 Mui Web 的依赖。Vite 从子模块读取组件，和应用共用 React 与 React DOM。精确别名需要放在应用的 `@` 别名前。
 
 ```ts
 import { fileURLToPath, URL } from "node:url"
 
 const mui = fileURLToPath(new URL("./libs/mui/web/src", import.meta.url))
 
-export default defineConfig({
-  resolve: {
-    alias: [
-      { find: /^@\/components\/ui\//, replacement: mui + "/components/ui/" },
-      { find: /^@\/styles\//,         replacement: mui + "/styles/" },
-      { find: /^@\/hooks\//,          replacement: mui + "/hooks/" },
-      { find: /^@\/lib\/utils$/,      replacement: mui + "/lib/utils" },
-      { find: "@", replacement: fileURLToPath(new URL("./src", import.meta.url)) },
-    ],
-  },
-})  // 你工程若已有 @ → ./src 的别名，保留它、把前四条加在它前面即可。
-```
-
-`tsconfig.json`（同理，具体的放前面）：
-
-```json
-{
-  "compilerOptions": {
-    "paths": {
-      "@/components/ui/*": ["./libs/mui/web/src/components/ui/*"],
-      "@/styles/*":        ["./libs/mui/web/src/styles/*"],
-      "@/hooks/*":         ["./libs/mui/web/src/hooks/*"],
-      "@/lib/utils":       ["./libs/mui/web/src/lib/utils.ts"],
-      "@/*":               ["./src/*"]
-    }
-  }
+// vite.config.ts 中的 resolve
+const resolve = {
+  dedupe: ["react", "react-dom"],
+  alias: [
+    { find: /^@\/components\/ui\//, replacement: mui + "/components/ui/" },
+    { find: /^@\/styles\//, replacement: mui + "/styles/" },
+    { find: /^@\/hooks\//, replacement: mui + "/hooks/" },
+    { find: /^@\/lib\/utils$/, replacement: mui + "/lib/utils.ts" },
+    { find: "@", replacement: fileURLToPath(new URL("./src", import.meta.url)) },
+  ],
 }
 ```
 
-##### 入口 CSS
+在 `tsconfig.json` 的 `compilerOptions.paths` 中配置相同的路径。应用如有自己的 hooks 或业务控件，请使用应用内的相对导入或单独的别名。
 
-（你的 `src/index.css`，路径按你入口文件位置调整——下面假设入口在 `src/` 下）：
-
-```css
-@import "tailwindcss";
-@import "tw-animate-css";
-
-/* ↓ 抄自 Mui 的 index.css 第 7-14 行，去掉了它自带的 tailwind/tw-animate 两行 */
-@import "../libs/mui/web/src/styles/tokens/colors.css";
-@import "../libs/mui/web/src/styles/tokens/radius.css";
-@import "../libs/mui/web/src/styles/tokens/typography.css";
-@import "../libs/mui/web/src/styles/tokens/shadow.css";
-@import "../libs/mui/web/src/styles/tokens/glass.css";
-@import "../libs/mui/web/src/styles/mibu-cat.css";
-@import "../libs/mui/web/src/styles/animations.css";
-@import "../libs/mui/web/src/styles/base.css";
-
-/* 让 Tailwind 扫到子模块里的 className，否则组件全掉样式 */
-@source "../libs/mui/web/src";
+```json
+{
+  "@/components/ui/*": ["./libs/mui/web/src/components/ui/*"],
+  "@/styles/*": ["./libs/mui/web/src/styles/*"],
+  "@/hooks/*": ["./libs/mui/web/src/hooks/*"],
+  "@/lib/utils": ["./libs/mui/web/src/lib/utils.ts"],
+  "@/*": ["./src/*"]
+}
 ```
 
-kt：以后库更新只要 `submodule update`，gradle 自动重编，配置不动。
-web：Mui 若新增了顶层 CSS 文件（比如再加一个 `foo.css`），你这条 import 列表要补一行；若只是改组件/令牌内容，不动配置。这就是 web 端唯一的「维护点」。
+在应用的 `src/index.css` 开头载入 Mui 样式，并显式扫描组件源码。
+
+```css
+@import "../libs/mui/web/src/index.css";
+@source "../libs/mui/web/src/components/ui";
+@source "../libs/mui/web/src/styles/surfaces";
+```

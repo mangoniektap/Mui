@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Moon, Search, Sun } from "lucide-react";
 
+import { BarSurface } from "@/components/ui/bar-surface";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -39,8 +40,8 @@ export function TopBar({
   };
 
   return (
-    <header className="sticky top-0 z-40 border-b bg-background/85 backdrop-blur">
-      <div className="flex h-14 items-center gap-4 px-4">
+    <BarSurface role="banner" className="sticky z-40">
+      <div className="flex h-full items-center gap-4 px-4">
         <div className="flex items-center gap-2.5">
           <div className="grid size-8 place-items-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground">
             M
@@ -82,6 +83,6 @@ export function TopBar({
           </Tooltip>
         </div>
       </div>
-    </header>
+    </BarSurface>
   );
 }

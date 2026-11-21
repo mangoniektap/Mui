@@ -53,13 +53,17 @@ object GlassTokens {
     /** --glass-rim-width 边缘窗口宽度（dp） */
     const val rimWidthDp = 2f
     /** --glass-lens-band 斜面宽度系数 */
-    const val lensBand = 0.45f
+    const val lensBand = 0.35f
     /** --glass-lens-bend 静止态放大率 - 1 */
-    const val lensBend = 0.33f
-    /** --glass-lens-compress 按压压缩率 */
-    const val lensCompress = 0.3f
+    const val lensBend = 0.35f
+    /** --glass-lens-compress 中心凹透镜压缩率（常驻，透明档静止也生效） */
+    const val lensCompress = 0.35f
     /** --glass-lens-chroma 色散总宽度（dp，像素量非倍率） */
-    const val lensChromaDp = 3f
+    const val lensChromaDp = 2f
+    /** --glass-lens-span 斜面固定带宽段的半长 / 半高：这段保持满带宽，之后沿轮廓弧度收到 0 */
+    const val lensSpan = 0.6f
+    /** --glass-lens-decay 斜面归零位置：0.5 = 顶 / 底归零，越大越早归零 */
+    const val lensDecay = 0.5f
     /** --glass-press-swell 按压外鼓系数 */
     const val pressSwell = 0.3f
     /** --glass-press-duration 按压动画时长（毫秒） */

@@ -59,7 +59,8 @@ enum class SwitchSize(val trackW: Float, val trackH: Float, val thumbW: Float, v
 private const val DRAG_THRESHOLD_DP = 3f
 
 /** 透镜画布比球外扩的边距：容纳按压外鼓，否则鼓出部分被画布裁掉 */
-private const val LENS_MARGIN_DP = 6f
+/** 画布外扩：外鼓 0.3×短边 + 惯性应变放大都要装得下 */
+private const val LENS_MARGIN_DP = 10f
 
 /** thumb 与轨道四周各留的缝：露出一道淡边，四边等粗 */
 private const val TRACK_INSET_DP = 1.5f
@@ -257,6 +258,8 @@ fun MuiSwitch(
             body = if (pressed) GlassBody.TRANSPARENT else GlassBody.JADE,
             pressed = pressed,
             lensBand = 0.3f,
+            // 斜面衰减变慢：顶 / 底仍留一点折射，球的上下边缘不至于完全没有玻璃感
+            lensDecay = 0.35f,
             shadow = GlassShadowLevel.SM,
         ) {
             paintPageBackdrop(resolvedPage)

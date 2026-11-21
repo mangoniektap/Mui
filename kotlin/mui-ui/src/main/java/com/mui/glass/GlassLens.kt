@@ -22,6 +22,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -40,7 +41,6 @@ import androidx.compose.ui.unit.dp
 import com.mui.token.MuiElevation
 import kotlin.math.abs
 import kotlin.math.exp
-import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -51,9 +51,15 @@ val EaseOutQuad: Easing = Easing { t -> 1f - (1f - t) * (1f - t) }
 data class GlassShadowParams(val color: androidx.compose.ui.graphics.Color, val dx: Float, val dy: Float, val blur: Float)
 
 /**
- * 运动惯性状态：画布位置 → 速度 → 沿运动方向的加速度 → 阻尼弹簧。
- * 应变由加速度驱动（匀速不形变），轴只取横/纵（带 25% 滞回），方向在速度归零后锁存。
- * position 取 root 坐标（web 版用文档坐标，页面滚动会被计入，拇指拖动场景两者一致）。
+ * 运动惯性状态：两个时间常数不同的跟随点之差（带通位移）。
+ *
+ * 不做数值微分 —— 原实现用 a = (v - pv)/dt 驱动弹簧，人手无法匀速，
+ * 位置量化与手速微抖会被 1/dt² 放大，弹簧被持续激励 ⇒ 抖动。
+ * 这里 dt 只出现在指数平滑的指数里：fast 紧跟（20ms）、slow 慢跟（55ms）。
+ * lag = fast - slow 是**带符号的速度量**，其符号只代表运动方向、不是相位，
+ * 所以 target 取 |lag|（运动强度）：左右 / 上下拖动的形变完全一致。
+ * target 已两级平滑，strain 只做一阶跟随：不再串欠阻尼弹簧（过冲会把 1+ε 顶出
+ * 画布的固定 margin 导致轮廓被切平，还会拖出 300ms+ 的慢动作回落）。
  */
 class GlassInertiaState {
     /** 最近一次量到的节点位置（root 坐标） */
@@ -62,7 +68,7 @@ class GlassInertiaState {
     private var _strain by mutableFloatStateOf(0f)
     private var _axis by mutableIntStateOf(0)
 
-    /** 沿应变轴的应变 ε（正 = 拉长 / 负 = 挤扁） */
+    /** 沿应变轴的应变 ε ≥ 0（运动强度，与运动方向无关） */
     var strain: Float
         get() = _strain
         private set(value) {
@@ -77,62 +83,57 @@ class GlassInertiaState {
         }
 
     private var ready = false
-    private var lastX = 0f
-    private var lastY = 0f
+    private var fastX = 0f
+    private var fastY = 0f
+    private var slowX = 0f
+    private var slowY = 0f
     private var lastT = 0f
-    private var vx = 0f
-    private var vy = 0f
-    private var pvx = 0f
-    private var pvy = 0f
-    private var dir = 1
-    private var acc = 0f
-    private var vel = 0f
 
     /** 每帧推进（nowNanos = 帧时钟），只量 position 的变化 */
     fun step(nowNanos: Long, motion: Int) {
         val px = position.x
         val py = position.y
         val now = nowNanos / 1_000_000f
-        val dt = if (ready) min((now - lastT) / 1000f, 0.02f) else 0f
-        if (ready && dt > 0f) {
-            // 速度低通（时间常数 45ms）
-            val kv = 1f - exp(-dt / 0.045f)
-            vx += ((px - lastX) / dt - vx) * kv
-            vy += ((py - lastY) / dt - vy) * kv
-            val sp = hypot(vx, vy)
-            val ax = abs(vx)
-            val ay = abs(vy)
-            // 轴带 25% 滞回；速度低于 40px/s 锁存轴与方向（急停要靠锁存的方向认出挤压侧）
-            if (sp > 40f) {
-                if (axis == 0 && ay > ax * 1.25f) axis = 1
-                else if (axis == 1 && ax > ay * 1.25f) axis = 0
-                val along = if (axis == 0) vx else vy
-                if (abs(along) > 40f) dir = if (along > 0f) 1 else -1
-            }
-            // 沿运动方向的加速度（再低通 25ms）
-            val aRaw = (if (axis == 0) vx - pvx else vy - pvy) / dt * dir
-            acc += (aRaw - acc) * (1f - exp(-dt / 0.025f))
-            pvx = vx
-            pvy = vy
-            // 目标应变 ∝ 加速度：3500px/s² 吃满一档，每档 3.5%
-            val target = (acc / 3500f).coerceIn(-1f, 1f) * 0.035f * motion
-            // 刚度 700、阻尼比 ≈ 0.5
-            vel += (-700f * (strain - target) - 27f * vel) * dt
-            strain = (strain + vel * dt).coerceIn(-0.35f, 0.45f)
+        if (!ready) {
+            fastX = px
+            slowX = px
+            fastY = py
+            slowY = py
+            lastT = now
+            ready = true
+            strain = 0f
+            axis = 0
+            return
         }
-        lastX = px
-        lastY = py
+        val dt = ((now - lastT) / 1000f).coerceIn(0.001f, 0.05f)
+        val kf = 1f - exp(-dt / 0.02f)
+        val ks = 1f - exp(-dt / 0.055f)
+        fastX += (px - fastX) * kf
+        fastY += (py - fastY) * kf
+        slowX += (px - slowX) * ks
+        slowY += (py - slowY) * ks
+        val lx = fastX - slowX
+        val ly = fastY - slowY
+        // 轴只取横 / 纵，用平滑后的 lag 判，带 25% 滞回
+        val ax = abs(lx)
+        val ay = abs(ly)
+        if (axis == 0 && ay > ax * 1.25f) axis = 1
+        else if (axis == 1 && ax > ay * 1.25f) axis = 0
+        // 匀速时 lag ≈ v·(τs−τf)，8px 吃满一档；τs−τf 由 60ms 缩到 35ms，
+        // 除数同比缩小才保持上一轮定好的灵敏度。
+        // 取 |lag|：符号只是运动方向，不是「起步 / 急停」相位；当相位用会让
+        // 向左走 ε<0、shader 把放大轴翻到垂直轴 ⇒ 玻璃反而变粗。
+        val along = if (axis == 0) lx else ly
+        val target = (abs(along) / 8f).coerceIn(0f, 1f) * 0.05f * motion
+        // target 已两级平滑，只做一阶跟随：二阶弹簧会过冲并拖出慢动作。
+        // 20/55/28ms 三条时间常数让起步跟手、回落干脆，不再粘稠
+        strain += (target - strain) * (1f - exp(-dt / 0.028f))
         lastT = now
-        ready = true
     }
 
     /** 档位关闭：全部清零，下一轮重新起算 */
     fun reset() {
         ready = false
-        pvx = 0f
-        pvy = 0f
-        acc = 0f
-        vel = 0f
         strain = 0f
         axis = 0
     }
@@ -149,10 +150,11 @@ class GlassInertiaState {
  * @param fillOutside true = 背面铺满画布（画布本身是背景）；false = 轮廓外只画影子
  * @param motion 运动惯性档位 0..5：0 关闭；只有真的会动的玻璃才给
  * @param body 本体档位；三档间两条通道独立插值（200ms），灰→透明路径不过白
- * @param pressed 按住态：引擎自己跑按压动画，进度同时驱动中心凹透镜与 swell
- * @param lens 手动指定按压进度 0..1，覆盖 pressed 的动画（多块玻璃各自按压时用）
+ * @param pressed 按住态：引擎自己跑按压动画，进度只驱动 swell 与换档，不参与光学
+ * @param lens 手动指定按压进度 0..1，覆盖 pressed 的动画（多块玻璃各自按压时用）；只驱动外鼓
  * @param lensBand 覆盖 --glass-lens-band（小件玻璃给更窄的斜面，如开关球 0.3）
- * @param lensCompress 覆盖 --glass-lens-compress（按压压缩率，小件玻璃给小值如 0.2）
+ * @param lensCompress 覆盖 --glass-lens-compress（凹透镜压缩率，常驻；小件玻璃给小值如 0.2）
+ * @param lensDecay 覆盖 --glass-lens-decay（斜面归零位置：0.5 = 顶底归零，越大越早归零）
  * @param shadow 影子档位（引擎层绘制，与 web 的 drop-shadow 同语义）
  * @param backdrop 画背面内容；在 DrawScope 上执行，dp 已按本机密度换算。
  *   放最后是为了能写成尾随 lambda —— 调用点全是 `GlassLens(...) { paintPageBackdrop(...) }` 这个形状。
@@ -169,7 +171,10 @@ fun GlassLens(
     lens: Float? = null,
     lensBand: Float? = null,
     lensCompress: Float? = null,
+    lensDecay: Float? = null,
     shadow: GlassShadowLevel = GlassShadowLevel.SM,
+    /** 可选内容层（文字 / 图标，透明底）：单独注入 uInk，只折射不缩小 */
+    ink: (DrawScope.() -> Unit)? = null,
     backdrop: DrawScope.() -> Unit,
 ) {
     val density = LocalDensity.current
@@ -178,7 +183,15 @@ fun GlassLens(
     val isDark = com.mui.theme.LocalIsDark.current
 
     val shader = remember { GlassShaderSource.compile() }
+    /* ⚠️ renderEffect 必须每帧新建：Compose 的 graphicsLayer 靠「参数变了」才会
+       重新配置并 invalidate 图层。复用同一个 RenderEffect 对象时参数恒等，图层停在第一帧
+       （那时 uRes 还是 1×1、SDF 全在画布外），整块玻璃直接消失。
+       屏闪的根因不是它，是 ink 位图与 backdrop 分处两个阶段更新 —— 那个在下面单独修。 */
     val bitmapRef = remember { mutableStateOf<ImageBitmap?>(null) }
+    val inkBitmapRef = remember { mutableStateOf<ImageBitmap?>(null) }
+    val inkFallback = remember { ImageBitmap(1, 1) }
+    /** 已绑到 uInk 的位图（普通引用，不参与 snapshot 失效） */
+    val boundInkRef = remember { arrayOfNulls<ImageBitmap?>(1) }
     val drawScopeHelper = remember { CanvasDrawScope() }
     val inertia = remember { GlassInertiaState() }
     val frameTick = remember { mutableIntStateOf(0) }
@@ -251,7 +264,7 @@ fun GlassLens(
                    而下一帧不会因为"尺寸变了"自动重来。 */
                 val w = canvasW.coerceAtLeast(1f)
                 val h = canvasH.coerceAtLeast(1f)
-                val pressSwell = GlassTokens.pressSwell * press.value
+                val pressSwell = GlassTokens.pressSwell * (lens ?: press.value)
                 val cen = FloatArray(GLASS_SHAPE_MAX * 2)
                 val hal = FloatArray(GLASS_SHAPE_MAX * 2)
                 val rad = FloatArray(GLASS_SHAPE_MAX)
@@ -281,8 +294,9 @@ fun GlassLens(
                 shader.setFloatUniform("uBendBand", floatArrayOf(lensBand ?: GlassTokens.lensBand))
                 shader.setFloatUniform("uBend", floatArrayOf(GlassTokens.lensBend))
                 shader.setFloatUniform("uCompress", floatArrayOf(lensCompress ?: GlassTokens.lensCompress))
-                shader.setFloatUniform("uLens", floatArrayOf((lens ?: press.value).coerceIn(0f, 1f)))
                 shader.setFloatUniform("uChroma", floatArrayOf(GlassTokens.lensChromaDp * dpr))
+                shader.setFloatUniform("uSpan", floatArrayOf(GlassTokens.lensSpan))
+                shader.setFloatUniform("uDecay", floatArrayOf(lensDecay ?: GlassTokens.lensDecay))
                 shader.setFloatUniform("uBody", floatArrayOf(jade))
                 shader.setFloatUniform("uGray", floatArrayOf(gray))
                 shader.setFloatUniform(
@@ -329,6 +343,42 @@ fun GlassLens(
                     shader.setFloatUniform("uShadowOffset", floatArrayOf(0f, 0f))
                     shader.setFloatUniform("uShadowBlur", floatArrayOf(1f))
                 }
+                /* 内容层（第二张位图 uInk）只在这里**绑定**：
+                   位图与 BitmapShader 只在尺寸变化时新建，内容由 drawBehind 与
+                   backdrop 同一次 draw 重画（见下）。两层各自负责压缩 / 不压缩的语义不变。
+                   早先两者分处两个阶段且每帧重建 GPU 资源，采样会错开一帧。 */
+                if (ink != null && w > 0f && h > 0f) {
+                    val iw = w.toInt().coerceAtLeast(1)
+                    val ih = h.toInt().coerceAtLeast(1)
+                    val ibmp = inkBitmapRef.value
+                        ?.takeIf { it.width == iw && it.height == ih }
+                        ?: ImageBitmap(iw, ih).also { inkBitmapRef.value = it }
+                    if (boundInkRef[0] !== ibmp) {
+                        shader.setInputShader(
+                            "uInk",
+                            android.graphics.BitmapShader(
+                                ibmp.asAndroidBitmap(),
+                                android.graphics.Shader.TileMode.CLAMP,
+                                android.graphics.Shader.TileMode.CLAMP,
+                            ),
+                        )
+                        boundInkRef[0] = ibmp
+                    }
+                    shader.setFloatUniform("uHasInk", floatArrayOf(1f))
+                } else {
+                    if (boundInkRef[0] !== inkFallback) {
+                        shader.setInputShader(
+                            "uInk",
+                            android.graphics.BitmapShader(
+                                inkFallback.asAndroidBitmap(),
+                                android.graphics.Shader.TileMode.CLAMP,
+                                android.graphics.Shader.TileMode.CLAMP,
+                            ),
+                        )
+                        boundInkRef[0] = inkFallback
+                    }
+                    shader.setFloatUniform("uHasInk", floatArrayOf(0f))
+                }
                 renderEffect = android.graphics.RenderEffect
                     .createRuntimeShaderEffect(shader, "uTex")
                     .asComposeRenderEffect()
@@ -350,6 +400,21 @@ fun GlassLens(
                     ?: ImageBitmap(wi, hi).also { bitmapRef.value = it }
                 drawScopeHelper.draw(density, layoutDirection, Canvas(bmp), Size(w, h)) {
                     backdrop()
+                }
+                // ink 与 backdrop 必须在同一次 draw 里更新：uTex 采的是本节点的绘制结果，
+                // uInk 采的是这张 CPU 位图，两者错开一个阶段就会逐帧相差一帧。
+                if (ink != null) {
+                    inkBitmapRef.value?.let { ibmp ->
+                        ibmp.asAndroidBitmap().eraseColor(android.graphics.Color.TRANSPARENT)
+                        drawScopeHelper.draw(
+                            density,
+                            layoutDirection,
+                            Canvas(ibmp),
+                            Size(ibmp.width.toFloat(), ibmp.height.toFloat()),
+                        ) {
+                            ink()
+                        }
+                    }
                 }
                 drawImage(bmp)
             }

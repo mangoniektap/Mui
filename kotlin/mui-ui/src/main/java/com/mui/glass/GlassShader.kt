@@ -57,11 +57,18 @@ const val GLASS_SHAPE_MAX = 3
  *
  * 两条硬约束（改了等于没有色散）：
  *   1) uChroma 是像素量，不是倍率；
- *   2) R/B 采样点必须夹回轮廓内，越界会折出接缝彩环。
+ *   2) R/B 只夹「相对 q 额外」的越界：q 自己越界是凹透镜缩小所需（放行），
+ *      色散多出来的越界不夹会折出接缝彩环。
+ *
+ * 档位：只有 TRANSPARENT 是玻璃（opt = 1）；JADE / GRAY 是磨砂，整套光学关掉。
+ * 斜面带宽沿轮廓弧度分布（uSpan 给保持满值的固定段，之后收到顶底 0），
+ * 凹透镜（全域）由 uCompress 常驻控制，透明档静止也能把背景导轨吸窄。
  */
 object GlassShaderSource {
     val agsl: String = """
 uniform shader uTex;
+uniform shader uInk;
+uniform float uHasInk;
 uniform float2 uRes;
 
 uniform float2 uCenter[3];
@@ -72,8 +79,10 @@ uniform float uBulge[3];
 uniform float uBendBand;
 uniform float uBend;
 uniform float uCompress;
-uniform float uLens;
+// 凹透镜常驻：强度只有 uCompress 一个来源，按压进度不参与光学
 uniform float uChroma;
+uniform float uSpan;
+uniform float uDecay;
 uniform float uBody;
 uniform float uGray;
 uniform float3 uGrayColor;
@@ -88,7 +97,7 @@ uniform float uRimBottom;
 uniform float uRimSide;
 uniform float uRimWidth;
 uniform float2 uMotionAxis;
-uniform float uMotionAmp;
+uniform float uMotionAmp; // ε ≥ 0：放大轴恒为应变轴、另一轴恒收窄
 uniform float uDpr;
 uniform float uFill;
 uniform float uAlpha;
@@ -124,17 +133,24 @@ half4 main(float2 fragCoord) {
     float sigma = max(uShadowBlur, 0.001) * 0.5;
 
     for (int i = 0; i < 3; i++) {
-        float2 v = p - uCenter[i];
-        float2 vv = v;
-        if (abs(uMotionAmp) > 0.0005) {
-            vv = v * mix(
-                float2(1.0 + uMotionAmp),
-                float2(1.0 / (1.0 + uMotionAmp)),
-                uMotionAxis
-            );
-        }
         float bw = uHalf[i].x + uBulge[i];
         float bh = uHalf[i].y + uBulge[i];
+        float2 v = p - uCenter[i];
+        float2 vv = v;
+        if (uMotionAmp > 0.0005) {
+            // 保体积应变 s·t=1；s 由这块玻璃在画布里的真实余量封顶。
+            // 画布外扩只按按压外鼓预算，uBulge 已吃掉大半，惯性再放大就会被切平。
+            // 放大侧按 s 封顶，收缩侧仍按**原始 sWant** 走：余量不足时形变不会整个
+            // 消失，只是由「拉长」变成「变窄」——不越界，流体感也还在。
+            float2 hv = float2(bw, bh);
+            float2 growAxis = uMotionAxis; // ε ≥ 0，放大轴恒为应变轴
+            float sWant = 1.0 + uMotionAmp;
+            float2 room = max(min(uCenter[i], uRes - uCenter[i]) - hv, float2(0.0));
+            float halfGrow = dot(growAxis, hv);
+            float roomGrow = dot(growAxis, room);
+            float s = min(sWant, 1.0 + roomGrow / max(halfGrow, 0.001));
+            vv = v * mix(float2(sWant), float2(1.0 / s), growAxis);
+        }
         float br = uRadius[i] + uBulge[i];
         float sd = sdRoundRect(vv, float2(bw, bh), br);
 
@@ -148,27 +164,62 @@ half4 main(float2 fragCoord) {
             float depth = max(-sd, 0.0);
             float mn = max(min(bw, bh), 0.001);
             float bevel = mn * uBendBand;
-            float opt = 1.0 - uGray;
-
-            float w = clamp(1.0 - depth / bevel, 0.0, 1.0);
-            w = w * w * (3.0 - 2.0 * w);
-            float m = 1.0 + uBend * w * opt;
-            float mc = 1.0 - uCompress * (1.0 - w) * uLens * opt;
-            mc = max(mc, 0.25);
-            float shift = length(vv) * (1.0 - 1.0 / m);
+            // 只有透明档是玻璃；玉白 / 平灰是磨砂，整套光学都不参与
+            float opt = 1.0 - max(uBody, uGray);
             float2 n = sdfNormal(vv, float2(bw, bh), br);
 
-            float o = uChroma * opt * smoothstep(0.0, 0.35, clamp(1.0 - depth / bevel, 0.0, 1.0));
+            // 斜面带宽沿轮廓弧度：固定段（y 轴投影 = uSpan × 全高）保持满带宽，
+            // 之后按法线角度收到 0。单参数 atan —— SkSL 没有可靠的 atan(y,x) 重载。
+            float th = atan(abs(n.y) / max(abs(n.x), 0.0001));
+            float th0 = asin(clamp(uSpan, 0.0, 1.0));
+            // 收窄进度 t：0 = 固定段末尾，1 = 顶 / 底。归零位置由 uDecay 控制：
+            // k=0.5 → 顶底归零；k>0.5 → 更早归零；k<0.5 → 顶底仍有残余
+            float t = clamp((th - th0) / max(1.5707963 - th0, 0.0001), 0.0, 1.0);
+            float k = clamp(uDecay, 0.05, 0.95);
+            float tEnd = (1.0 - k) / k;
+            float s = clamp(t / tEnd, 0.0, 1.0);
+            float taper = 1.0 - s * s * (3.0 - 2.0 * s);
+            float wRaw = clamp(1.0 - depth / bevel, 0.0, 1.0);
+            float w = wRaw * wRaw * (3.0 - 2.0 * wRaw) * taper;
+            float m = 1.0 + uBend * w * opt;
+            // 凹透镜常驻，强度只有 uCompress 一个来源；范围覆盖整个玻璃内部。
+            // 只给中心的话斜面圈会被凸透镜独占，轨道反而比玻璃外宽
+            float mc = 1.0 - uCompress * opt;
+            mc = max(mc, 0.25);
+            float shift = length(vv) * (1.0 - 1.0 / m);
+
+            float o = uChroma * opt * taper * smoothstep(0.0, 0.35, wRaw);
             float2 q = vv / mc - n * shift;
+            // 只夹色散相对 q 额外造成的越界；q 自己越界是凹透镜缩小所需，
+            // 全域压缩下斜面圈的 q 也会越界，整体夹回会让 R/B 停在原处、只有 G 缩小
             float2 tapR = q + n * (o * 0.5);
             float2 tapB = q - n * (o * 0.5);
             float2 hv = float2(bw, bh);
-            tapR -= n * max(sdRoundRect(tapR, hv, br), 0.0) * w;
-            tapB -= n * max(sdRoundRect(tapB, hv, br), 0.0) * w;
+            float overQ = max(sdRoundRect(q, hv, br), 0.0);
+            tapR -= n * max(max(sdRoundRect(tapR, hv, br), 0.0) - overQ, 0.0) * w;
+            tapB -= n * max(max(sdRoundRect(tapB, hv, br), 0.0) - overQ, 0.0) * w;
             float3 sc;
             sc.r = uTex.eval(uCenter[i] + tapR).r;
             sc.g = uTex.eval(uCenter[i] + q).g;
             sc.b = uTex.eval(uCenter[i] + tapB).b;
+            // 内容层只走凸透镜位移，不除 mc：文字 / 图标折射但不缩小。
+            // 色散两层都要做：彩边主要来自文字这种高对比边缘，只给背景层分通道会看不见
+            if (uHasInk > 0.5) {
+                float2 qInk = vv - n * shift;
+                float2 inkR = qInk + n * (o * 0.5);
+                float2 inkB = qInk - n * (o * 0.5);
+                float overInk = max(sdRoundRect(qInk, hv, br), 0.0);
+                inkR -= n * max(max(sdRoundRect(inkR, hv, br), 0.0) - overInk, 0.0) * w;
+                inkB -= n * max(max(sdRoundRect(inkB, hv, br), 0.0) - overInk, 0.0) * w;
+                // 三通道各自合成：R/B 用自己错位位置的 ink 覆盖度。
+                // 共用中心 alpha 会把错位造成的覆盖差异统一裁掉，色散就没了
+                half4 inkR4 = uInk.eval(uCenter[i] + inkR);
+                half4 inkG4 = uInk.eval(uCenter[i] + qInk);
+                half4 inkB4 = uInk.eval(uCenter[i] + inkB);
+                sc.r = mix(sc.r, inkR4.r, inkR4.a);
+                sc.g = mix(sc.g, inkG4.g, inkG4.a);
+                sc.b = mix(sc.b, inkB4.b, inkB4.a);
+            }
 
             float vt = clamp((vv.y + bh) / max(2.0 * bh, 0.001), 0.0, 1.0);
             float pk = clamp(uBodyPeak, 0.05, 0.95);

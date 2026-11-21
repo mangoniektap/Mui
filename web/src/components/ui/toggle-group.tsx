@@ -23,14 +23,19 @@ const SEG_TEXT = "h-8 px-4 text-sm"
 const SEG_STACK = "flex-col gap-1 px-4 py-2 text-[11px] leading-none"
 
 /**
- * 段的公共外观。选中态只换文字色，底色交给底座上那块玻璃。
- * 段压在玻璃**下面**（z-10）：玻璃是最顶层，段里的字和图标由背纹理重绘后透过玻璃看。
- * 选中段的颜色读 --seg-active-color（Root 上给，默认 --foreground）——
- * 灰档画布半透明、DOM 透得出来，所以这一层染色负责"平时的变色"；
- * 按住切成透明档时画布全不透明，改由纹理那一层染色，且被玻璃轮廓裁成一半一半。
+ * 段的公共外观。文字色只由「玻璃此刻是否压在这一段上」决定（data-covered），
+ * **不读 Radix 的 data-state** —— 那是逻辑选中值，松手前一直停在按下时提交的段，
+ * 玻璃却早已跟手走了，两者一脱钩就会出现「玻璃拖走了、旧段还亮着」。
+ *
+ * 两层染色只认同一个量：玻璃的几何位置。
+ *   · 这一层（DOM）：只在玻璃与某段完整对齐时把整段染成 --seg-active-color。
+ *     灰档画布半透明、段在轮廓内外都透得出来，所以只能整段给色，不能按轮廓裁。
+ *   · 纹理那一层：一律用激活色重绘所有段，由 shader 的玻璃轮廓裁开 ——
+ *     按住切透明档时玻璃盖住哪块、哪块就变色，横跨轮廓的字正好一半一半。
+ * 拖动中玻璃不落在任何段边界上，这一层全部保持原色，染色完全交给纹理层。
  */
 const SEG_BASE =
-  "relative z-10 inline-flex items-center justify-center rounded-full font-medium whitespace-nowrap outline-none transition-colors text-muted-foreground hover:text-foreground data-[state=on]:text-[color:var(--seg-active-color)] focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+  "relative z-10 inline-flex items-center justify-center rounded-full font-medium whitespace-nowrap outline-none transition-colors duration-[280ms] ease-[cubic-bezier(0.32,0.72,0,1)] text-muted-foreground hover:text-foreground data-[covered=true]:text-[color:var(--seg-active-color)] focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
 
 /** 玻璃滑动的缓动（与开关 thumb 的吸附同一条手感） */
 const GLIDE = "translate 280ms cubic-bezier(0.32, 0.72, 0, 1)"
@@ -39,7 +44,8 @@ const GLIDE = "translate 280ms cubic-bezier(0.32, 0.72, 0, 1)"
  * 画布外扩边距 = 段高 × 这个比例：单边要同时装下按压外鼓（0.3×短边 ≈ 0.15h）
  * 与惯性挤扁时的纵向膨胀（约 0.17h），给小了那一下会被画布切掉。
  */
-const LENS_MARGIN_RATIO = 0.32
+/** 画布外扩要同时装下按压外鼓（0.3×短边）与惯性应变放大；只按外鼓给会把玻璃切平 */
+const LENS_MARGIN_RATIO = 0.6
 
 /** 一个段的盒子（相对 Root 的 padding box） */
 type SegBox = {
@@ -206,6 +212,15 @@ function ToggleGroup({
   const clampX = (x: number) => Math.min(Math.max(x, trackMin), trackMax)
   const box = segs[pending ?? active]
   const glassLeft = drag ? clampX(drag.baseX + drag.dx) : box?.x ?? 0
+  /**
+   * 染色的唯一判据：玻璃此刻与哪一段**完整对齐**。
+   * 段级 DOM 染色只在对齐时给（静止 / 吸附落定）；拖动中玻璃不落在任何段边界上，
+   * 于是所有段保持原色，玻璃盖住的那块由纹理层按轮廓精确染色。
+   * 绝不能拿 data-state（逻辑选中值）当判据 —— 松手前它不会更新，会一直染旧段。
+   */
+  const coveredIndex = segs.findIndex(
+    (s) => Math.abs(s.x - glassLeft) < 1 && Math.abs(s.w - (box?.w ?? 0)) < 1
+  )
   /** 画布外扩量：玻璃中心与 inset 都读它，两处必须同源 */
   const lensMargin = box ? Math.ceil(box.h * LENS_MARGIN_RATIO) : 0
   marginRef.current = lensMargin
@@ -259,9 +274,32 @@ function ToggleGroup({
       )
       ctx.stroke()
 
-      // 每一段的字 / 图标。给了 activeColor 就一律用这个色：纹理只在玻璃轮廓内显示，
-      // 所以"染色"自然被轮廓裁开——横跨轮廓的字就是一半原色（DOM）一半目标色（纹理）。
-      const tint = resolveColor(activeColorRef.current, root)
+      ctx.restore()
+    },
+    []
+  )
+
+  /**
+   * 内容层：字 / 图标单独画进 uInk，走 q = vv - n*shift ——
+   * 只被凸透镜折射，不参与 backdrop 那层的凹透镜压缩，所以尺寸不变。
+   */
+  const paintInk = React.useCallback(
+    (
+      ctx: CanvasRenderingContext2D,
+      _w: number,
+      _h: number,
+      dpr: number
+    ) => {
+      const root = rootRef.current
+      const glass = glassRef.current
+      if (!root || !glass) return
+      const g = glass.getBoundingClientRect()
+      const m = marginRef.current
+      ctx.save()
+      ctx.scale(dpr, dpr)
+      const tint =
+        resolveColor(activeColorRef.current, root) ??
+        resolveColor("var(--foreground)", root)
       for (const el of root.querySelectorAll<HTMLElement>(
         '[data-slot="toggle-group-item"]'
       )) {
@@ -286,7 +324,6 @@ function ToggleGroup({
         const label = el.lastElementChild as HTMLElement | null
         const text = label?.textContent?.trim() || el.textContent?.trim()
         if (!text) continue
-        // 有 label 就用它的盒子定位（竖排时正好落在图标下方），取不到退回段中心
         const lr = label?.getBoundingClientRect()
         const ls = getComputedStyle(label ?? el)
         ctx.font = `${ls.fontStyle} ${ls.fontWeight} ${ls.fontSize} ${ls.fontFamily}`
@@ -402,7 +439,8 @@ function ToggleGroup({
       style={
         {
           "--gap": spacing,
-          // 选中段的文字/图标颜色：DOM 这一层（灰档透出）+ 纹理那一层（透明档）共用同一个来源
+          // 玻璃压住的那一段的文字/图标颜色：DOM 层按 covered 用它，
+          // 纹理层按轮廓重绘时也解析到同一个值（activeColor 或 --foreground）
           "--seg-active-color": activeColor ?? "var(--foreground)",
         } as React.CSSProperties
       }
@@ -428,10 +466,11 @@ function ToggleGroup({
     >
       <ToggleGroupContext.Provider value={{ variant, size, spacing, segmented }}>
         {segmented && items
-          ? items.map((item) => (
+          ? items.map((item, i) => (
               <ToggleGroupPrimitive.Item
                 key={item.value}
                 data-slot="toggle-group-item"
+                data-covered={coveredIndex === i ? "true" : undefined}
                 value={item.value}
                 className={cn(SEG_BASE, item.icon ? SEG_STACK : SEG_TEXT)}
               >
@@ -439,7 +478,15 @@ function ToggleGroup({
                 <span>{item.label}</span>
               </ToggleGroupPrimitive.Item>
             ))
-          : children}
+          : segmented
+            ? React.Children.map(children, (child, i) =>
+                React.isValidElement<{ "data-covered"?: string }>(child)
+                  ? React.cloneElement(child, {
+                      "data-covered": coveredIndex === i ? "true" : undefined,
+                    })
+                  : child
+              )
+            : children}
       </ToggleGroupContext.Provider>
       {/* 玻璃是最顶层（z-20）：段在它下面，内容由背纹理重绘后透过玻璃看。
           按压外鼓 / 中心凹透镜 / 运动惯性都交给引擎，组件只给状态与几何。 */}
@@ -481,8 +528,9 @@ function ToggleGroup({
               },
             ]}
             backdrop={paintTrack}
-            // 内部缩放（中心凹透镜）不开：这块玻璃只做"外鼓 + 换档"，不吸窄背面
-            className="absolute inset-[calc(var(--lens-margin)*-1)] [--glass-lens-compress:0] [transition-property:--glass-jade,--glass-gray] duration-[var(--glass-body-duration)] ease-out"
+            ink={paintInk}
+            // 单选组单独给 0.10：滑块只轻压背景轨道，不把段里的字明显缩小
+            className="absolute inset-[calc(var(--lens-margin)*-1)] [--glass-lens-compress:0.10] [--glass-lens-decay:0.7] [transition-property:--glass-jade,--glass-gray] duration-[var(--glass-body-duration)] ease-out"
           />
         </span>
       )}

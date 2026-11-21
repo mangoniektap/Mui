@@ -8,7 +8,8 @@ const THUMB_W = 24
 const THUMB_H = 16
 
 /** 透镜画布比拇指件外扩的边距：容纳按压外鼓，否则鼓出部分被画布裁掉 */
-const LENS_MARGIN = 6
+/** 画布外扩：外鼓 0.3×短边 + 惯性应变放大都要装得下 */
+const LENS_MARGIN = 10
 
 /**
  * 玻璃拇指件：胶囊（宽 > 高、圆角 = 半高），不是正圆。折射 / 色散都在引擎里，
@@ -91,7 +92,7 @@ function GlassThumb() {
     >
       <GlassLens
         live
-        motion={5} // 水滴惯性：加速度驱动，起步甩长、急停挤扁后回弹
+        motion={5} // 水滴惯性：带通位移驱动，起步甩长、急停挤扁后一阶回 0
         body={pressed ? "transparent" : "jade"}
         pressed={pressed}
         shapes={[

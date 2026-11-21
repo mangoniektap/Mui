@@ -44,7 +44,8 @@ private const val THUMB_W = 24f
 private const val THUMB_H = 16f
 
 /** 透镜画布比拇指件外扩的边距：容纳按压外鼓 */
-private const val LENS_MARGIN = 6f
+/** 画布外扩：外鼓 0.3×短边 + 惯性应变放大都要装得下 */
+private const val LENS_MARGIN = 10f
 
 /**
  * 滑杆：轨道 h-2 胶囊（bg-muted）+ 已填充段（bg-primary）+ 玻璃拇指件。

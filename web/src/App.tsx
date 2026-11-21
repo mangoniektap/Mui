@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { BarSurface } from "@/components/ui/bar-surface";
 import { Sidebar } from "@/showcase/Sidebar";
 import { TopBar } from "@/showcase/TopBar";
 import { TocRail, type TocItem } from "@/showcase/TocRail";
@@ -99,6 +100,7 @@ export default function App() {
           </div>
         </main>
       </div>
+      <BarSurface bottom role="contentinfo" className="sticky z-40" />
     </div>
   );
 }
