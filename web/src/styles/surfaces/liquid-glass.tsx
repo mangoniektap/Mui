@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
+import { useBackdropGlass } from "@/styles/surfaces/backdrop-glass";
 
 /**
  * 液态玻璃引擎（WebGL）。这是玻璃的唯一实现——折射 / 色散都在这里。
@@ -99,6 +100,10 @@ uniform float uFill; // 轮廓外画什么：0 = 透明（玻璃贴在 DOM 上�
 uniform float uAlpha; // 轮廓内不透明度：1 = 全盖住 / <1 = 磨砂半透明，让背面 DOM 透出来
 uniform float uClear; // --glass-clear 1 = 轮廓内 alpha 只由「玻璃改变量」给出（全透明本体）
 
+uniform float uBrowserBackdrop;
+uniform int uDisplacementChannel; // 0 = 玻璃，1–3 = R/G/B 位移图
+uniform float uDisplacementScale; // 位移图所用 feDisplacementMap 的设备像素范围
+
 // 圆角矩形 SDF：h = 半宽半高，r = 圆角半径（胶囊 r = 半高）
 float sdRoundRect(vec2 p, vec2 h, float r) {
   vec2 q = abs(p) - h + r;
@@ -119,7 +124,7 @@ void main() {
   vec2 p = vec2((vPos.x * 0.5 + 0.5) * uRes.x, (0.5 - vPos.y * 0.5) * uRes.y);
   vec2 uv = p / uRes;
   vec3 back = texture2D(uTex, uv).rgb;
-  vec3 col = back;
+  vec3 col = uBrowserBackdrop > 0.5 ? vec3(0.0) : back;
 
   // 覆盖度：轮廓内 1、轮廓外 0。抗锯齿带宽按 CSS 像素给（× dpr 换设备像素）——
   // 写死 1 设备像素会让 retina 上只剩 0.5 CSS px，小球边缘锯齿明显。
@@ -212,10 +217,23 @@ void main() {
     float overQ = max(sdRoundRect(q, hv, br), 0.0);
     tapR -= n * max(max(sdRoundRect(tapR, hv, br), 0.0) - overQ, 0.0) * w;
     tapB -= n * max(max(sdRoundRect(tapB, hv, br), 0.0) - overQ, 0.0) * w;
-    vec3 sc;
-    sc.r = texture2D(uTex, (uCenter[i] + tapR) / uRes).r;
-    sc.g = texture2D(uTex, (uCenter[i] + q) / uRes).g;
-    sc.b = texture2D(uTex, (uCenter[i] + tapB) / uRes).b;
+    if (uDisplacementChannel > 0) {
+      vec2 tap = uDisplacementChannel == 1 ? tapR : uDisplacementChannel == 3 ? tapB : q;
+      vec2 offset = (uCenter[i] + tap - p) / uDisplacementScale;
+      vec2 encoded = clamp(vec2(0.5) + offset, 0.0, 1.0);
+      gl_FragColor = vec4(encoded * cov, 0.0, cov);
+      return;
+    }
+
+    vec4 trackR = texture2D(uTex, (uCenter[i] + tapR) / uRes);
+    vec4 trackG = texture2D(uTex, (uCenter[i] + q) / uRes);
+    vec4 trackB = texture2D(uTex, (uCenter[i] + tapB) / uRes);
+    vec3 sc = vec3(trackR.r, trackG.g, trackB.b);
+    vec3 opacity = vec3(1.0);
+    if (uBrowserBackdrop > 0.5) {
+      opacity = vec3(trackR.a, trackG.a, trackB.a);
+      sc *= opacity;
+    }
 
     // 内容层只走凸透镜位移，不除 mc：文字 / 图标被折射但尺寸不变。
     // 背景轨道仍由 q = vv/mc - n*shift 压缩采样，两层互不干扰。
@@ -237,6 +255,7 @@ void main() {
       sc.r = mix(sc.r, inkR4.r, inkR4.a);
       sc.g = mix(sc.g, inkG4.g, inkG4.a);
       sc.b = mix(sc.b, inkB4.b, inkB4.a);
+      opacity = mix(opacity, vec3(1.0), vec3(inkR4.a, inkG4.a, inkB4.a));
     }
 
     // ③ 本体：透明档不是空的，是一层灰，浓度由"厚度"给——
@@ -257,7 +276,9 @@ void main() {
     float sideIn = clamp(1.0 - depth / max(bevel, 0.001), 0.0, 1.0);
     sideIn *= sideIn;
     thick *= 1.0 - uBodyFadeX * sideIn * abs(n.x);
-    sc = mix(sc, uBodyColor, uBodyShade * thick * opt);
+    float tint = uBodyShade * thick * opt;
+    sc = mix(sc, uBodyColor, tint);
+    opacity = mix(opacity, vec3(1.0), tint);
 
     // ④ 边缘：顶/底轻微高光，两侧暗边。窗口只贴轮廓一条（--glass-rim-width），
     //    方向权重用外法线分：直边上整条铺开，圆角处上下与左右自然过渡。
@@ -266,9 +287,13 @@ void main() {
     float nUp = max(-n.y, 0.0); // 朝上 = 顶边
     float nDn = max(n.y, 0.0); // 朝下 = 底边
     float nSide = abs(n.x); // 朝左右 = 两侧
-    sc = mix(sc, uRimLight, clamp(rim * nUp * uRimTop * opt, 0.0, 1.0));
-    sc = mix(sc, uRimLight, clamp(rim * nDn * uRimBottom * opt, 0.0, 1.0));
-    sc = mix(sc, uRimDark, clamp(rim * nSide * uRimSide * opt, 0.0, 1.0));
+    float topLight = clamp(rim * nUp * uRimTop * opt, 0.0, 1.0);
+    float bottomLight = clamp(rim * nDn * uRimBottom * opt, 0.0, 1.0);
+    float sideShade = clamp(rim * nSide * uRimSide * opt, 0.0, 1.0);
+    sc = mix(sc, uRimLight, topLight);
+    sc = mix(sc, uRimLight, bottomLight);
+    sc = mix(sc, uRimDark, sideShade);
+    opacity = 1.0 - (1.0 - opacity) * (1.0 - topLight) * (1.0 - bottomLight) * (1.0 - sideShade);
 
     // ⑤ 玉白档：整块纯白不透明，盖掉本体与边缘。
     sc = mix(sc, vec3(1.0), uBody);
@@ -277,6 +302,7 @@ void main() {
     //    透明感交给 uAlpha（半透明 ⇒ 底下的 DOM 字照样透出来），
     //    所以灰的明度可以按主题对称地给，不会被背面（白页面 / 深页面）带跑偏。
     sc = mix(sc, uGrayColor, uGray);
+    opacity = 1.0 - (1.0 - opacity) * (1.0 - uBody) * (1.0 - uGray);
 
     col = mix(col, sc, cov);
     // uClear：不画任何线、也不手调颜色。这一圈玻璃有多实，由凸透镜真实算出的
@@ -286,7 +312,17 @@ void main() {
     if (uClear > 0.5) {
       ca = cov * clamp(length(sc - back) * 3.0 + shift / max(bevel, 0.001) * 0.6, 0.0, 1.0);
     }
-    a = max(a, ca);
+    float coverage = max(opacity.r, max(opacity.g, opacity.b));
+    a = max(a, ca * coverage);
+  }
+
+  if (uDisplacementChannel > 0) {
+    gl_FragColor = vec4(0.0);
+    return;
+  }
+  if (uBrowserBackdrop > 0.5) {
+    gl_FragColor = vec4(col * uAlpha, a * uAlpha);
+    return;
   }
 
   // uFill = 1：画布自己就是这一幕的背景（舞台），轮廓外继续铺背面。
@@ -439,6 +475,7 @@ export type GlassShadow = "none" | "xs" | "sm" | "md" | "lg" | "xl";
 export function GlassLens({
   shapes,
   backdrop,
+  browserBackdrop = false,
   className,
   live = false,
   fillOutside = false,
@@ -470,6 +507,8 @@ export function GlassLens({
     h: number,
     dpr: number
   ) => void;
+  /** 由浏览器合成真实页面像素，backdrop 仅补绘内容本身的透明图层。 */
+  browserBackdrop?: boolean;
   className?: string;
   /** true = rAF 常驻重绘，且每帧重画背面（球在动 / 背面在跟着变时用） */
   live?: boolean;
@@ -515,6 +554,7 @@ export function GlassLens({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [noWebgl, setNoWebgl] = useState(false);
+  const page = useBackdropGlass(browserBackdrop && !noWebgl);
   /** 按压进度：pressed 时引擎自己跑那条共用动画；给了 lens 就用调用方那份 */
   const press = useGlassPress(pressed);
   const lens = lensProp ?? press;
@@ -537,13 +577,14 @@ export function GlassLens({
   } | null>(null);
   /** 背面纹理脏了（换主题 / 换令牌）：下一次 draw 先重画再上传 */
   const dirty = useRef(true);
-  const latest = useRef({ shapes, backdrop, ink, live, fillOutside, lens, motion });
+  const latest = useRef({ shapes, backdrop, ink, live, fillOutside, lens, motion, browserBackdrop });
   latest.current.shapes = shapes;
   latest.current.backdrop = backdrop;
   latest.current.ink = ink;
   latest.current.live = live;
   latest.current.fillOutside = fillOutside;
   latest.current.lens = lens;
+  latest.current.browserBackdrop = browserBackdrop;
   latest.current.motion = Math.min(5, Math.max(0, motion));
 
   /**
@@ -626,6 +667,7 @@ export function GlassLens({
       "uRimLight", "uRimDark", "uRimTop", "uRimBottom", "uRimSide", "uRimWidth",
       "uMotionAxis", "uMotionAmp",
       "uDpr", "uFill", "uAlpha", "uClear",
+      "uBrowserBackdrop", "uDisplacementChannel", "uDisplacementScale",
     ]) {
       u[n] = gl.getUniformLocation(prog, n);
     }
@@ -836,12 +878,18 @@ export function GlassLens({
     gl.uniform2fv(u.uHalf, hal);
     gl.uniform1fv(u.uRadius, rad);
     gl.uniform1fv(u.uBulge, bul);
-    gl.uniform1f(u.uBendBand, num("--glass-lens-band", 0.35));
-    gl.uniform1f(u.uBend, num("--glass-lens-bend", 0.35));
-    gl.uniform1f(u.uCompress, num("--glass-lens-compress", 0.35));
-    gl.uniform1f(u.uChroma, num("--glass-lens-chroma") * dpr); // px → 设备像素
-    gl.uniform1f(u.uSpan, Math.min(1, Math.max(0, num("--glass-lens-span", 0.6))));
-    gl.uniform1f(u.uDecay, Math.min(0.95, Math.max(0.05, num("--glass-lens-decay", 0.5))));
+    const bendBand = num("--glass-lens-band", 0.35);
+    const bend = num("--glass-lens-bend", 0.35);
+    const compress = num("--glass-lens-compress", 0.35);
+    const chroma = num("--glass-lens-chroma");
+    const span = Math.min(1, Math.max(0, num("--glass-lens-span", 0.6)));
+    const decay = Math.min(0.95, Math.max(0.05, num("--glass-lens-decay", 0.5)));
+    gl.uniform1f(u.uBendBand, bendBand);
+    gl.uniform1f(u.uBend, bend);
+    gl.uniform1f(u.uCompress, compress);
+    gl.uniform1f(u.uChroma, chroma * dpr);
+    gl.uniform1f(u.uSpan, span);
+    gl.uniform1f(u.uDecay, decay);
     // 两条独立通道（不是一条 0..2 的标量）：灰 → 透明只让 gray 那条 1→0，
     // jade 那条始终 0，所以过渡路径上不会经过"纯白"。
     const jade = Math.min(1, Math.max(0, num("--glass-jade", 0)));
@@ -868,6 +916,37 @@ export function GlassLens({
     gl.uniform1f(u.uMotionAmp, mo > 0 ? im.strain : 0);
     gl.uniform1f(u.uDpr, dpr);
     gl.uniform1f(u.uFill, latest.current.fillOutside ? 1 : 0);
+    gl.uniform1f(u.uBrowserBackdrop, latest.current.browserBackdrop ? 1 : 0);
+
+    if (latest.current.browserBackdrop && canvasRef.current) {
+      const canvas = canvasRef.current;
+      if (Math.max(jade, gray) >= 0.999) {
+        page.clear();
+      } else {
+        const width = Math.round(w / dpr);
+        const height = Math.round(h / dpr);
+        const scale = Math.max(width, height) * (
+          Math.abs(1 / Math.max(1 - compress, 0.25) - 1) + Math.abs(bend) + im.strain
+        ) + Math.abs(chroma) + 2;
+        const key = [width, height, dpr, bendBand, bend, compress, chroma, span, decay, jade, gray,
+          im.axis, im.strain, ...cen, ...hal, ...rad, ...bul]
+          .map((value) => Math.round(value * 100)).join(",");
+        page.publish({
+          key, width, height, scale,
+          draw(target, channel) {
+            gl.viewport(0, 0, width, height);
+            gl.uniform1f(u.uDisplacementScale, scale * dpr);
+            gl.uniform1i(u.uDisplacementChannel, channel + 1);
+            gl.drawArrays(gl.TRIANGLES, 0, 3);
+            const ctx = target.getContext("2d");
+            ctx?.clearRect(0, 0, width, height);
+            ctx?.drawImage(canvas, 0, h - height, width, height, 0, 0, width, height);
+          },
+        });
+      }
+    }
+    gl.viewport(0, 0, w, h);
+    gl.uniform1i(u.uDisplacementChannel, 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
@@ -911,6 +990,7 @@ export function GlassLens({
     <div className={cn("relative", bodyClass, className)}>
       {/* 影子交给 CSS 的 drop-shadow：它跟着画布的 alpha 走，
           所以玻璃是什么形状（圆角 / 胶囊 / 圆 / 几块叠着）影子就是什么形状 */}
+      {page.layer}
       <canvas
         ref={canvasRef}
         className="absolute inset-0 h-full w-full"

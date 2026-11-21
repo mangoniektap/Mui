@@ -1,130 +1,136 @@
-import { useEffect, useId, useState } from "react";
+/** @file 将 GLSL 算出的三通道位移交给浏览器合成器，折射实时页面背景。 */
+import { Fragment, useEffect, useId, useRef } from "react";
 
-/**
- * @file 单选切换组的液态玻璃表面。
- * @brief Canvas 只生成折射位移图，浏览器合成器提供透镜后的实时像素。
- */
+const channels = ["r", "g", "b"] as const;
+const matrices = [
+  "1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0 1",
+  "0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 0 1",
+  "0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 0 1",
+];
 
-interface BackdropGlassProps {
+type BackdropFrame = {
+  key: string;
   width: number;
   height: number;
-  pressed: boolean;
-}
+  scale: number;
+  draw: (canvas: HTMLCanvasElement, channel: number) => void;
+};
 
-interface DisplacementMap {
-  width: number;
-  height: number;
-  url: string;
-}
-
-/** 以 R、G 通道分别编码水平和垂直位移。胶囊边缘向内取样，中部保持原位。 */
-function createDisplacementMap(width: number, height: number) {
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  if (!context) return null;
-
-  const pixels = context.createImageData(width, height);
-  const radius = Math.min(width, height) / 2;
-  const coreX = width / 2 - radius;
-  const coreY = height / 2 - radius;
-  const rimWidth = radius * 0.45;
-
-  for (let y = 0; y < height; y++) {
-    const offsetY = y + 0.5 - height / 2;
-    const normalY = Math.sign(offsetY) * Math.max(0, Math.abs(offsetY) - coreY);
-    for (let x = 0; x < width; x++) {
-      const offsetX = x + 0.5 - width / 2;
-      const normalX = Math.sign(offsetX) * Math.max(0, Math.abs(offsetX) - coreX);
-      const length = Math.hypot(normalX, normalY);
-      const edge = Math.min(1, Math.max(0, (length - radius + rimWidth) / rimWidth));
-      const displacement = length > 0 ? 127 * edge ** 2 / length : 0;
-
-      const index = (y * width + x) * 4;
-      pixels.data[index] = 128 - normalX * displacement;
-      pixels.data[index + 1] = 128 - normalY * displacement;
-      pixels.data[index + 3] = 255;
-    }
-  }
-  context.putImageData(pixels, 0, 0);
-  return canvas;
-}
-
-/** 按下时对实时背景应用折射，松开时保留原有半透明灰档。 */
-export function BackdropGlass({ width, height, pressed }: BackdropGlassProps) {
-  const filterId = "mui-segment-lens-" + useId();
-  const [map, setMap] = useState<DisplacementMap | null>(null);
+/** 在浏览器内部组合三通道，Canvas 只传位移和轮廓，不传页面像素。 */
+export function useBackdropGlass(enabled: boolean) {
+  const filterId = "mui-segment-backdrop-" + useId();
+  const filterRef = useRef<SVGFilterElement>(null);
+  const surfaceRef = useRef<HTMLSpanElement>(null);
+  const state = useRef({
+    urls: [] as string[],
+    canvas: null as HTMLCanvasElement | null,
+    pending: false,
+    active: false,
+    key: "",
+    generation: 0,
+  });
 
   useEffect(() => {
-    if (width <= 0 || height <= 0) return;
-    const canvas = createDisplacementMap(width, height);
-    if (!canvas) return;
-
-    let disposed = false;
-    let url: string | undefined;
-    canvas.toBlob((blob) => {
-      if (!blob || disposed) return;
-      url = URL.createObjectURL(blob);
-      setMap({ width, height, url });
-    });
-
     return () => {
-      disposed = true;
-      if (url) URL.revokeObjectURL(url);
+      const current = state.current;
+      current.generation++;
+      current.pending = false;
+      current.active = false;
+      current.key = "";
+      current.urls.forEach((url) => URL.revokeObjectURL(url));
+      current.urls = [];
     };
-  }, [width, height]);
+  }, [enabled]);
 
-  const displacement = map?.width === width && map.height === height ? map.url : null;
-  const refraction = "url(\"#" + filterId + "\")";
-  const fallback = "blur(0.75px)";
-  const filter = displacement && CSS.supports("backdrop-filter", refraction) ? refraction : fallback;
+  function clear() {
+    state.current.active = false;
+    if (surfaceRef.current?.style.backdropFilter) {
+      surfaceRef.current.style.removeProperty("backdrop-filter");
+    }
+  }
 
-  return (
+  /** 等同一帧的三张位移图齐备后，再更新滤镜输入。 */
+  function publish(frame: BackdropFrame) {
+    const current = state.current;
+    const filter = filterRef.current;
+    const surface = surfaceRef.current;
+    if (!filter || !surface) return;
+    const cssFilter = 'url("#' + filterId + '")';
+    if (!CSS.supports("backdrop-filter", cssFilter)) return;
+    current.active = true;
+    if (current.urls.length && !surface.style.backdropFilter) surface.style.backdropFilter = cssFilter;
+    if (current.pending || frame.key === current.key) return;
+
+    const canvas = (current.canvas ??= document.createElement("canvas"));
+    if (canvas.width !== frame.width) canvas.width = frame.width;
+    if (canvas.height !== frame.height) canvas.height = frame.height;
+    const generation = current.generation;
+    current.pending = true;
+    current.key = frame.key;
+
+    const snapshots = channels.map((_, channel) => {
+      frame.draw(canvas, channel);
+      return new Promise<Blob | null>((resolve) => canvas.toBlob(resolve));
+    });
+    void Promise.all(snapshots).then(async (blobs) => {
+      if (generation !== current.generation) return;
+      const maps = blobs.filter((blob): blob is Blob => blob !== null);
+      const nextUrls = maps.map((blob) => URL.createObjectURL(blob));
+      const ready = maps.length === channels.length && await Promise.all(nextUrls.map(async (url) => {
+        const image = new Image();
+        image.src = url;
+        await image.decode();
+      })).then(() => true, () => false);
+
+      if (generation !== current.generation || !ready) {
+        nextUrls.forEach((url) => URL.revokeObjectURL(url));
+        if (generation === current.generation) {
+          current.pending = false;
+          current.key = "";
+        }
+        return;
+      }
+
+      const previousUrls = current.urls;
+      current.urls = nextUrls;
+      current.pending = false;
+      filter.setAttribute("width", String(frame.width));
+      filter.setAttribute("height", String(frame.height));
+      filter.querySelectorAll("feImage").forEach((image, index) => {
+        image.setAttribute("width", String(frame.width));
+        image.setAttribute("height", String(frame.height));
+        image.setAttribute("href", current.urls[index]);
+      });
+      filter.querySelectorAll("feDisplacementMap").forEach((map) => {
+        map.setAttribute("scale", String(frame.scale));
+      });
+      if (current.active) surface.style.backdropFilter = cssFilter;
+      previousUrls.forEach((url) => URL.revokeObjectURL(url));
+    });
+  }
+
+  const layer = enabled && (
     <>
-      {displacement && (
-        <svg aria-hidden="true" className="pointer-events-none absolute size-0" width={0} height={0}>
-          <defs>
-            <filter
-              id={filterId}
-              x={0}
-              y={0}
-              width={width}
-              height={height}
-              filterUnits="userSpaceOnUse"
-              primitiveUnits="userSpaceOnUse"
-              colorInterpolationFilters="sRGB"
-            >
-              <feImage href={displacement} width={width} height={height} preserveAspectRatio="none" result="displacement" />
-              <feDisplacementMap
-                in="SourceGraphic"
-                in2="displacement"
-                scale={Math.min(width, height) * 0.28}
-                xChannelSelector="R"
-                yChannelSelector="G"
-              />
-            </filter>
-          </defs>
-        </svg>
-      )}
-      <span
-        data-slot="toggle-group-lens"
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-0 rounded-full transition-[scale,background-color,box-shadow] duration-[var(--glass-press-duration)] ease-out motion-reduce:transition-none"
-        style={{
-          scale: pressed
-            ? "calc(1 + var(--glass-press-swell) * " + Math.min(1, height / width) + ") calc(1 + var(--glass-press-swell))"
-            : "1",
-          backdropFilter: pressed ? filter : undefined,
-          WebkitBackdropFilter: pressed ? filter : undefined,
-          backgroundColor: pressed
-            ? "color-mix(in oklab, var(--glass-body-color) 10%, transparent)"
-            : "color-mix(in oklab, var(--glass-gray-color) calc(var(--glass-gray-alpha) * 100%), transparent)",
-          boxShadow: pressed
-            ? "var(--shadow-glass-sm), inset 0 1px 1px color-mix(in oklab, var(--glass-rim-light) 55%, transparent), inset 0 -1px 2px color-mix(in oklab, var(--glass-rim-dark) 15%, transparent)"
-            : undefined,
-        }}
-      />
+      <svg width={0} height={0} aria-hidden="true" className="absolute pointer-events-none">
+        <defs>
+          <filter ref={filterRef} id={filterId} x={0} y={0} filterUnits="userSpaceOnUse"
+            primitiveUnits="userSpaceOnUse" colorInterpolationFilters="sRGB">
+            {channels.map((channel, index) => (
+              <Fragment key={channel}>
+                <feImage x={0} y={0} preserveAspectRatio="none" result={"map-" + channel} />
+                <feDisplacementMap in="SourceGraphic" in2={"map-" + channel} result={"warp-" + channel}
+                  xChannelSelector="R" yChannelSelector="G" />
+                <feColorMatrix in={"warp-" + channel} values={matrices[index]} result={channel} />
+              </Fragment>
+            ))}
+            <feBlend in="r" in2="g" mode="screen" result="rg" />
+            <feBlend in="rg" in2="b" mode="screen" result="rgb" />
+            <feComposite in="rgb" in2="map-r" operator="in" />
+          </filter>
+        </defs>
+      </svg>
+      <span ref={surfaceRef} aria-hidden="true" className="absolute inset-0 pointer-events-none" />
     </>
   );
+  return { layer, publish, clear };
 }
