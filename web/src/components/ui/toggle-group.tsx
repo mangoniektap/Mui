@@ -22,9 +22,9 @@ const SEG_TEXT = "h-8 px-4 text-sm"
 /** 段：图标 + 文字（图标 16 + 间距 4 + 文字 14 + 上下 padding 16 = 50） */
 const SEG_STACK = "flex-col gap-1 px-4 py-2 text-[11px] leading-none"
 
-/** 选中项继承组的激活色，玻璃覆盖的文字和图标也使用同一颜色。 */
+/** 完整对齐时底层文字和图标继承激活色，局部覆盖时由透镜绘制颜色。 */
 const SEG_BASE =
-  "relative z-10 inline-flex items-center justify-center rounded-full font-medium whitespace-nowrap outline-none transition-colors duration-[280ms] ease-[cubic-bezier(0.32,0.72,0,1)] text-muted-foreground hover:text-foreground data-[state=on]:text-inherit data-[state=on]:hover:text-inherit focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+  "relative z-10 inline-flex items-center justify-center rounded-full font-medium whitespace-nowrap outline-none text-muted-foreground hover:text-foreground data-[covered]:text-inherit data-[covered]:hover:text-inherit focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
 
 /** 玻璃滑动的缓动（与开关 thumb 的吸附同一条手感） */
 const GLIDE = "translate 280ms cubic-bezier(0.32, 0.72, 0, 1)"
@@ -35,6 +35,16 @@ const GLIDE = "translate 280ms cubic-bezier(0.32, 0.72, 0, 1)"
  */
 /** 画布外扩要同时装下按压外鼓（0.3×短边）与惯性应变放大；只按外鼓给会把玻璃切平 */
 const LENS_MARGIN_RATIO = 0.6
+
+/** 只有透镜与段实际对齐时，才给底层的整个段着色。 */
+function updateSegmentCoverage(item: HTMLElement, segment: DOMRect, glass?: DOMRect) {
+  const aligned = glass !== undefined &&
+    Math.abs(segment.left - glass.left) < 1 &&
+    Math.abs(segment.top - glass.top) < 1 &&
+    Math.abs(segment.width - glass.width) < 1 &&
+    Math.abs(segment.height - glass.height) < 1
+  item.toggleAttribute("data-covered", aligned)
+}
 
 /** 一个段的盒子（相对 Root 的 padding box） */
 type SegBox = {
@@ -112,7 +122,7 @@ function ToggleGroup({
     spacing?: number
     /** 栏目清单（个数 = 长度）：只为单选组准备，给了就不用再写 ToggleGroupItem */
     items?: ToggleGroupSegmentedItem[]
-    /** 选中项的文字和图标颜色，默认使用主题主色。 */
+    /** 玻璃覆盖处的文字和图标颜色，默认使用主题主色。 */
     activeColor?: string
   }) {
   /** 只有 type="single" 换成胶囊底座：底座白色 classical，选中区域是玻璃 */
@@ -186,6 +196,13 @@ function ToggleGroup({
   const clampX = (x: number) => Math.min(Math.max(x, trackMin), trackMax)
   const box = segs[pending ?? active]
   const glassLeft = drag ? clampX(drag.baseX + drag.dx) : box?.x ?? 0
+  const refreshCoverage = React.useCallback(() => {
+    const glass = glassRef.current?.getBoundingClientRect()
+    for (const item of rootRef.current?.querySelectorAll<HTMLElement>('[data-slot="toggle-group-item"]') ?? []) {
+      updateSegmentCoverage(item, item.getBoundingClientRect(), glass)
+    }
+  }, [])
+  React.useLayoutEffect(refreshCoverage, [refreshCoverage, segmented, box, glassLeft])
   /** 画布外扩量：玻璃中心与 inset 都读它，两处必须同源 */
   const lensMargin = box ? Math.ceil(box.h * LENS_MARGIN_RATIO) : 0
   marginRef.current = lensMargin
@@ -267,6 +284,7 @@ function ToggleGroup({
         '[data-slot="toggle-group-item"]'
       )) {
         const er = el.getBoundingClientRect()
+        updateSegmentCoverage(el, er, g)
         const cx = er.left - g.left + m + er.width / 2
         const cy = er.top - g.top + m + er.height / 2
         const svg = el.querySelector<SVGElement>("svg")
@@ -448,6 +466,7 @@ function ToggleGroup({
       {segmented && box && (
         <span
           ref={glassRef}
+          onTransitionEnd={refreshCoverage}
           aria-hidden
           className="pointer-events-none absolute top-0 left-0 z-20"
           style={
