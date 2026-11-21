@@ -125,38 +125,37 @@ function Invoke-Push {
         return
     }
 
-    # 5: 无变更
-    if ([string]::IsNullOrWhiteSpace($changes)) {
-        Write-Success "未检测到变更，无需提交。"
-        return
+    $hasChanges = -not [string]::IsNullOrWhiteSpace($changes)
+    if ($hasChanges) {
+        Write-Info "待提交的文件:"
+        Write-Host $changes
+        $prompt = "即将提交并推送，是否继续？[y/N]"
+    }
+    else {
+        $prompt = "即将推送现有提交，是否继续？[y/N]"
     }
 
-    # 6: 显示文件列表
-    Write-Info "待提交的文件:"
-    Write-Host $changes
-
-    # 7-8: 二次确认
-    $confirm = Read-Host "`n即将执行提交并推送操作，是否继续？[y/N]"
+    $confirm = Read-Host $prompt
     if ($confirm -notmatch '^(y|yes)$') {
         Write-Info "用户取消操作。"
         return
     }
 
-    # 9: git add .
-    Write-Info "执行 git add ."
-    & git add .
-    if ($LASTEXITCODE -ne 0) {
-        Write-Err "git add 执行失败。"
-        return
-    }
+    if ($hasChanges) {
+        Write-Info "执行 git add ."
+        & git add .
+        if ($LASTEXITCODE -ne 0) {
+            Write-Err "git add 执行失败。"
+            return
+        }
 
-    # 10-11: 提交
-    $msg = "$(Get-Date -Format 'yyyy-MM-dd HH:mm') 更新"
-    Write-Info "提交: $msg"
-    & git commit -m $msg
-    if ($LASTEXITCODE -ne 0) {
-        Write-Err "git commit 执行失败。"
-        return
+        $msg = "$(Get-Date -Format 'yyyy-MM-dd HH:mm') 更新"
+        Write-Info "提交: $msg"
+        & git commit -m $msg
+        if ($LASTEXITCODE -ne 0) {
+            Write-Err "git commit 执行失败。"
+            return
+        }
     }
 
     # 12: 推送
