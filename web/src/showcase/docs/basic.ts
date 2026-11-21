@@ -295,7 +295,7 @@ import { Toggle } from "@/components/ui/toggle"
       { name: "value / defaultValue", type: "string | string[]", desc: "选中值；单选为 string，多选为 string[]" },
       { name: "onValueChange", type: "(value: string | string[]) => void", desc: "选中变化回调" },
       { name: "items", type: "{ value: string; label: string; icon?: ReactNode }[]", desc: "仅单选组：栏目清单，给了就不写 ToggleGroupItem；各栏 label 请等长" },
-      { name: "activeColor", type: "string", desc: "仅单选组：被玻璃盖住部分的文字 / 图标颜色，支持 var(--x)" },
+      { name: "activeColor", type: "string", default: "var(--primary)", desc: "单选组的选中项文字和图标颜色，支持传入其他 CSS 颜色" },
       { name: "variant / size", type: "toggleVariants", desc: "仅多选组生效，传给每个 ToggleGroupItem" },
       { name: "spacing", type: "number", default: "0", desc: "仅多选组：按钮之间的间距" },
     ],
