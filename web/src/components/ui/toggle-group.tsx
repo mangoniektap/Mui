@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils"
 import { ToggleGroup as ToggleGroupPrimitive } from "radix-ui"
 
 import { toggleVariants } from "@/components/ui/toggle"
-import { GlassLens, paintPageBackdrop } from "@/styles/surfaces/liquid-glass"
+import { BackdropGlass } from "@/styles/surfaces/backdrop-glass"
 
 /**
  * 单选组的一个栏目。
@@ -22,30 +22,12 @@ const SEG_TEXT = "h-8 px-4 text-sm"
 /** 段：图标 + 文字（图标 16 + 间距 4 + 文字 14 + 上下 padding 16 = 50） */
 const SEG_STACK = "flex-col gap-1 px-4 py-2 text-[11px] leading-none"
 
-/**
- * 段的公共外观。文字色只由「玻璃此刻是否压在这一段上」决定（data-covered），
- * **不读 Radix 的 data-state** —— 那是逻辑选中值，松手前一直停在按下时提交的段，
- * 玻璃却早已跟手走了，两者一脱钩就会出现「玻璃拖走了、旧段还亮着」。
- *
- * 两层染色只认同一个量：玻璃的几何位置。
- *   · 这一层（DOM）：只在玻璃与某段完整对齐时把整段染成 --seg-active-color。
- *     灰档画布半透明、段在轮廓内外都透得出来，所以只能整段给色，不能按轮廓裁。
- *   · 纹理那一层：一律用激活色重绘所有段，由 shader 的玻璃轮廓裁开 ——
- *     按住切透明档时玻璃盖住哪块、哪块就变色，横跨轮廓的字正好一半一半。
- * 拖动中玻璃不落在任何段边界上，这一层全部保持原色，染色完全交给纹理层。
- */
+/** 段在玻璃对齐时使用激活色。折射由玻璃直接读取下方的渲染内容。 */
 const SEG_BASE =
   "relative z-10 inline-flex items-center justify-center rounded-full font-medium whitespace-nowrap outline-none transition-colors duration-[280ms] ease-[cubic-bezier(0.32,0.72,0,1)] text-muted-foreground hover:text-foreground data-[covered=true]:text-[color:var(--seg-active-color)] focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
 
 /** 玻璃滑动的缓动（与开关 thumb 的吸附同一条手感） */
 const GLIDE = "translate 280ms cubic-bezier(0.32, 0.72, 0, 1)"
-
-/**
- * 画布外扩边距 = 段高 × 这个比例：单边要同时装下按压外鼓（0.3×短边 ≈ 0.15h）
- * 与惯性挤扁时的纵向膨胀（约 0.17h），给小了那一下会被画布切掉。
- */
-/** 画布外扩要同时装下按压外鼓（0.3×短边）与惯性应变放大；只按外鼓给会把玻璃切平 */
-const LENS_MARGIN_RATIO = 0.6
 
 /** 一个段的盒子（相对 Root 的 padding box） */
 type SegBox = {
@@ -66,43 +48,6 @@ const sameBoxes = (a: SegBox[], b: SegBox[]) =>
       s.h === b[i].h &&
       s.on === b[i].on
   )
-
-/**
- * canvas 的 fillStyle 不认 `var()`，所以 activeColor 允许写成 `var(--primary)`：
- * 在这里把变量名解析成当前主题下的真实颜色。每帧解析一次，主题切换（只改 html class、
- * 不触发重渲染）也能跟着变。
- */
-function resolveColor(raw: string | undefined, el: HTMLElement) {
-  if (!raw) return undefined
-  const m = /^var\(\s*(--[\w-]+)\s*\)$/.exec(raw)
-  if (!m) return raw
-  const v = getComputedStyle(el).getPropertyValue(m[1]).trim()
-  return v || undefined
-}
-
-/**
- * 图标 → 位图。canvas 画不了 React 节点，只能把 lucide 的 svg 序列化后当图片贴。
- * lucide 用 stroke="currentColor"，序列化前先换成真实色，否则在图片里等于黑色。
- * 按元素缓存，颜色变了才重建（选中/未选中两种）。
- */
-const iconCache = new WeakMap<
-  SVGElement,
-  { color: string; img: HTMLImageElement }
->()
-
-function iconImage(svg: SVGElement, color: string): HTMLImageElement | null {
-  const hit = iconCache.get(svg)
-  if (hit && hit.color === color) {
-    return hit.img.complete && hit.img.naturalWidth > 0 ? hit.img : null
-  }
-  const markup = new XMLSerializer()
-    .serializeToString(svg)
-    .replaceAll("currentColor", color)
-  const img = new Image()
-  img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(markup)}`
-  iconCache.set(svg, { color, img })
-  return null // 第一帧先返回空，等 onload 后由下一帧（live）补上
-}
 
 const ToggleGroupContext = React.createContext<
   VariantProps<typeof toggleVariants> & {
@@ -131,26 +76,15 @@ function ToggleGroup({
     spacing?: number
     /** 栏目清单（个数 = 长度）：只为单选组准备，给了就不用再写 ToggleGroupItem */
     items?: ToggleGroupSegmentedItem[]
-    /**
-     * 被玻璃**盖住**的那部分文字 / 图标换成这个颜色。按几何位置算，不是按选中：
-     * 玻璃滑到哪里就染到哪里，横跨轮廓的字会一半原色、一半目标色
-     * （分界线就是玻璃轮廓——DOM 用原色、纹理里重绘的那份用本色，轮廓天然裁开）。
-     */
+    /** 玻璃与段对齐时该段的文字和图标颜色。 */
     activeColor?: string
   }) {
   /** 只有 type="single" 换成胶囊底座：底座白色 classical，选中区域是玻璃 */
   const segmented = props.type === "single"
   const rootRef = React.useRef<HTMLDivElement>(null)
-  /** 玻璃块（= 段盒子）本身，画布比它四周各外扩 lensMargin */
-  const glassRef = React.useRef<HTMLSpanElement>(null)
-  /** 外扩量：paintTrack 里要用，但它随段高变，用 ref 传进去 */
-  const marginRef = React.useRef(0)
-  /** 玻璃盖住的内容要用的颜色：paintTrack 是 [] 依赖，靠 ref 取最新值 */
-  const activeColorRef = React.useRef<string | undefined>(undefined)
-  activeColorRef.current = activeColor
   /** 每个段的盒子（相对 Root 的 padding box）：玻璃按它摆位、也按它吸附 */
   const [segs, setSegs] = React.useState<SegBox[]>([])
-  /** 按住态：交给引擎跑按压进度，同时驱动外鼓与中心凹透镜 */
+  /** 按住时玻璃扩大并启用折射。 */
   const [pressed, setPressed] = React.useState(false)
   /** 拖动中：起点、起始段左边缘与宽、累计位移、是否真的拖起来了 */
   const [drag, setDrag] = React.useState<{
@@ -212,133 +146,9 @@ function ToggleGroup({
   const clampX = (x: number) => Math.min(Math.max(x, trackMin), trackMax)
   const box = segs[pending ?? active]
   const glassLeft = drag ? clampX(drag.baseX + drag.dx) : box?.x ?? 0
-  /**
-   * 染色的唯一判据：玻璃此刻与哪一段**完整对齐**。
-   * 段级 DOM 染色只在对齐时给（静止 / 吸附落定）；拖动中玻璃不落在任何段边界上，
-   * 于是所有段保持原色，玻璃盖住的那块由纹理层按轮廓精确染色。
-   * 绝不能拿 data-state（逻辑选中值）当判据 —— 松手前它不会更新，会一直染旧段。
-   */
+  // 拖动时 Radix 的选中值还未提交，颜色按玻璃与段的位置判断。
   const coveredIndex = segs.findIndex(
     (s) => Math.abs(s.x - glassLeft) < 1 && Math.abs(s.w - (box?.w ?? 0)) < 1
-  )
-  /** 画布外扩量：玻璃中心与 inset 都读它，两处必须同源 */
-  const lensMargin = box ? Math.ceil(box.h * LENS_MARGIN_RATIO) : 0
-  marginRef.current = lensMargin
-
-  /**
-   * 背面 = 这一块玻璃压着的那一层：页面 + 底座（带投影）+ **每一段的字与图标**。
-   * 玻璃是最顶层，段本身被它盖住，所以内容必须在这里重绘一遍再折射，
-   * 否则玻璃滑过时字会整块消失。滑动时底座相对画布在动，所以用 live 每帧重画。
-   */
-  const paintTrack = React.useCallback(
-    (ctx: CanvasRenderingContext2D, w: number, h: number, dpr: number) => {
-      const root = rootRef.current
-      const glass = glassRef.current
-      if (!root || !glass) return
-      const cs = getComputedStyle(root)
-      const r = root.getBoundingClientRect()
-      const g = glass.getBoundingClientRect()
-      const m = marginRef.current
-      // 画布左上（CSS 坐标）= 玻璃块左上 − 外扩量；以下全部换算成画布坐标
-      const dx = r.left - g.left + m
-      const dy = r.top - g.top + m
-
-      ctx.save()
-      ctx.scale(dpr, dpr)
-      paintPageBackdrop(ctx, w / dpr, h / dpr, root.parentElement)
-
-      // 底座：实色胶囊 + 一圈投影（白底座压在白页面上，全靠这圈影子给出边界）
-      const radius = r.height / 2
-      ctx.save()
-      ctx.shadowColor = "rgba(0, 0, 0, 0.12)"
-      ctx.shadowBlur = 4
-      ctx.shadowOffsetY = 1
-      ctx.fillStyle = cs.backgroundColor
-      ctx.beginPath()
-      ctx.roundRect(dx, dy, r.width, r.height, radius)
-      ctx.fill()
-      ctx.restore()
-
-      // 底座的 1px 描边也要画进纹理：玻璃块压在底座上、斜面会把框线折出来，
-      // 不画的话玻璃盖住的那一段边框就断了（canvas 范围外由 DOM 补，颜色同源所以接得上）。
-      const bw = root.clientLeft || 1
-      ctx.strokeStyle = cs.borderTopColor
-      ctx.lineWidth = bw
-      ctx.beginPath()
-      ctx.roundRect(
-        dx + bw / 2,
-        dy + bw / 2,
-        r.width - bw,
-        r.height - bw,
-        radius - bw / 2
-      )
-      ctx.stroke()
-
-      ctx.restore()
-    },
-    []
-  )
-
-  /**
-   * 内容层：字 / 图标单独画进 uInk，走 q = vv - n*shift ——
-   * 只被凸透镜折射，不参与 backdrop 那层的凹透镜压缩，所以尺寸不变。
-   */
-  const paintInk = React.useCallback(
-    (
-      ctx: CanvasRenderingContext2D,
-      _w: number,
-      _h: number,
-      dpr: number
-    ) => {
-      const root = rootRef.current
-      const glass = glassRef.current
-      if (!root || !glass) return
-      const g = glass.getBoundingClientRect()
-      const m = marginRef.current
-      ctx.save()
-      ctx.scale(dpr, dpr)
-      const tint =
-        resolveColor(activeColorRef.current, root) ??
-        resolveColor("var(--foreground)", root)
-      for (const el of root.querySelectorAll<HTMLElement>(
-        '[data-slot="toggle-group-item"]'
-      )) {
-        const er = el.getBoundingClientRect()
-        const cx = er.left - g.left + m + er.width / 2
-        const cy = er.top - g.top + m + er.height / 2
-        const color = tint ?? getComputedStyle(el).color
-        const svg = el.querySelector<SVGElement>("svg")
-        if (svg) {
-          const img = iconImage(svg, color)
-          if (img) {
-            const sr = svg.getBoundingClientRect()
-            ctx.drawImage(
-              img,
-              sr.left - g.left + m,
-              sr.top - g.top + m,
-              sr.width,
-              sr.height
-            )
-          }
-        }
-        const label = el.lastElementChild as HTMLElement | null
-        const text = label?.textContent?.trim() || el.textContent?.trim()
-        if (!text) continue
-        const lr = label?.getBoundingClientRect()
-        const ls = getComputedStyle(label ?? el)
-        ctx.font = `${ls.fontStyle} ${ls.fontWeight} ${ls.fontSize} ${ls.fontFamily}`
-        ctx.fillStyle = tint ?? ls.color
-        ctx.textAlign = "center"
-        ctx.textBaseline = "middle"
-        ctx.fillText(
-          text,
-          lr && lr.width ? lr.left - g.left + m + lr.width / 2 : cx,
-          lr && lr.height ? lr.top - g.top + m + lr.height / 2 : cy
-        )
-      }
-      ctx.restore()
-    },
-    []
   )
 
   function handlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
@@ -439,8 +249,7 @@ function ToggleGroup({
       style={
         {
           "--gap": spacing,
-          // 玻璃压住的那一段的文字/图标颜色：DOM 层按 covered 用它，
-          // 纹理层按轮廓重绘时也解析到同一个值（activeColor 或 --foreground）
+          // 玻璃与段对齐时让文字和图标使用同一个激活色。
           "--seg-active-color": activeColor ?? "var(--foreground)",
         } as React.CSSProperties
       }
@@ -488,50 +297,18 @@ function ToggleGroup({
               )
             : children}
       </ToggleGroupContext.Provider>
-      {/* 玻璃是最顶层（z-20）：段在它下面，内容由背纹理重绘后透过玻璃看。
-          按压外鼓 / 中心凹透镜 / 运动惯性都交给引擎，组件只给状态与几何。 */}
-      {segmented && box && (
+      {segmented && box && box.w > 0 && box.h > 0 && (
         <span
-          ref={glassRef}
-          aria-hidden
-          className="pointer-events-none absolute top-0 left-0 z-20"
-          style={
-            {
-              translate: `${glassLeft}px ${box.y}px`,
-              width: box.w,
-              height: box.h,
-              // 只有真拖起来才关过渡：按下那一下要"滑"过去，不能瞬移；
-              // 拖动中必须有过渡就得跟手失效，会拖影。宽高不加：栏等宽不需要，
-              // 且宽高过渡会每帧触发 ResizeObserver 重建纹理。
-              transition: drag?.moved ? "none" : GLIDE,
-              // 画布外扩量：GlassLens 的 inset 类读它，与 shapes 的中心同源
-              "--lens-margin": `${lensMargin}px`,
-            } as React.CSSProperties
-          }
+          aria-hidden="true"
+          className="pointer-events-none absolute top-0 left-0 z-20 motion-reduce:transition-none"
+          style={{
+            translate: `${glassLeft}px ${box.y}px`,
+            width: box.w,
+            height: box.h,
+            transition: drag?.moved ? "none" : GLIDE,
+          }}
         >
-          <GlassLens
-            live
-            motion={3}
-            // 平时平灰档（磨砂感的灰），按住切成透明档
-            body={pressed ? "transparent" : "gray"}
-            pressed={pressed}
-            // 平灰档是贴在底座上的一层灰，不浮起 —— 不给影子；按住换成透明档时才有
-            shadow={pressed ? "sm" : "none"}
-            shapes={[
-              {
-                cx: lensMargin + box.w / 2,
-                cy: lensMargin + box.h / 2,
-                hw: box.w / 2,
-                hh: box.h / 2,
-                radius: box.h / 2,
-                swell: 1,
-              },
-            ]}
-            backdrop={paintTrack}
-            ink={paintInk}
-            // 单选组单独给 0.10：滑块只轻压背景轨道，不把段里的字明显缩小
-            className="absolute inset-[calc(var(--lens-margin)*-1)] [--glass-lens-compress:0.10] [--glass-lens-decay:0.7] [transition-property:--glass-jade,--glass-gray] duration-[var(--glass-body-duration)] ease-out"
-          />
+          <BackdropGlass width={box.w} height={box.h} pressed={pressed} />
         </span>
       )}
     </ToggleGroupPrimitive.Root>
