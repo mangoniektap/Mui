@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { cn } from "@/lib/utils";
 import { useBackdropGlass } from "@/styles/surfaces/backdrop-glass";
@@ -399,12 +399,12 @@ export function paintPageBackdrop(
   ctx.fillRect(0, 0, w, h);
 }
 
-/** 读数字令牌（"0.45" / "3px" 都取数值部分），令牌从 :root 读 */
-function tokenNum(name: string, fallback: number) {
-  const v = parseFloat(
-    getComputedStyle(document.documentElement).getPropertyValue(name)
-  );
-  return Number.isFinite(v) ? v : fallback;
+/** 将 CSS 时长统一转换为毫秒，生产构建可能把 150ms 压缩成 .15s。 */
+function tokenMilliseconds(name: string, fallback: number) {
+  const token = getComputedStyle(document.documentElement).getPropertyValue(name).trim().toLowerCase();
+  const amount = Number.parseFloat(token);
+  if (!Number.isFinite(amount)) return fallback;
+  return token.endsWith("s") && !token.endsWith("ms") ? amount * 1000 : amount;
 }
 
 /**
@@ -448,18 +448,24 @@ export function animateGlassPress(
   to: number,
   onUpdate: (v: number) => void
 ) {
-  const dur = Math.max(tokenNum("--glass-press-duration", 150), 1);
-  let start: number | undefined;
+  const dur = Math.max(tokenMilliseconds("--glass-press-duration", 150), 1);
+  let previousFrame: number | undefined;
+  let elapsed = 0;
   let raf = 0;
+  let cancelled = false;
   const step = (now: number) => {
-    // 页面切换可能推迟首帧，从 rAF 真正开始时计时，避免第一帧跳到中途。
-    start ??= now;
-    const t = Math.min(1, (now - start) / dur);
+    // 页面首次加载可能阻塞一帧。保留下一帧的缩放过程，避免补跑整段动画。
+    if (previousFrame !== undefined) elapsed += Math.min(now - previousFrame, 1000 / 30);
+    previousFrame = now;
+    const t = Math.min(1, elapsed / dur);
     onUpdate(from + (to - from) * (1 - (1 - t) * (1 - t)));
-    if (t < 1) raf = requestAnimationFrame(step);
+    if (!cancelled && t < 1) raf = requestAnimationFrame(step);
   };
   raf = requestAnimationFrame(step);
-  return () => cancelAnimationFrame(raf);
+  return () => {
+    cancelled = true;
+    cancelAnimationFrame(raf);
+  };
 }
 
 /** 按住状态 → 进度 0..1（GlassLens 内部用，拿到的是同一份动画） */
@@ -488,6 +494,7 @@ export function GlassLens({
   live = false,
   fillOutside = false,
   motion = 0,
+  motionReference,
   body = "transparent",
   pressed = false,
   lens: lensProp,
@@ -532,6 +539,8 @@ export function GlassLens({
    * 只有真的会动的玻璃才给（拇指件 / 球），静止的卡牌保持 0。
    */
   motion?: number;
+  /** 运动惯性只统计相对于此容器的位移，容器移动时不带动玻璃变形。 */
+  motionReference?: RefObject<HTMLElement | null>;
   /**
    * 本体档位：
    *   "transparent"（默认）= 透明档：竖向的灰层次 + 边缘明暗；
@@ -550,8 +559,9 @@ export function GlassLens({
    * 手动指定按压进度 0..1，覆盖 pressed 的动画：一个 GlassLens 里有几块玻璃
    * 各自按压时（展示站的舞台）由调用方算进度，用 shapes[].bulge 给外鼓。
    * 只驱动外鼓与换档，不再参与光学（凹透镜由 --glass-lens-compress 常驻控制）。
+   * live 模式可以直接读取进度 ref，避免为每一帧重新渲染组件树。
    */
-  lens?: number;
+  lens?: number | RefObject<number>;
   /**
    * 影子的档位，与 shadow-* 一一对应（xs/sm/md/lg/xl），"none" = 不投。
    * 引擎用 drop-shadow 画，所以影子跟着玻璃轮廓走；档位值见 shadow.css 的 --shadow-glass-*。
@@ -585,7 +595,7 @@ export function GlassLens({
   } | null>(null);
   /** 背面纹理脏了（换主题 / 换令牌）：下一次 draw 先重画再上传 */
   const dirty = useRef(true);
-  const latest = useRef({ shapes, backdrop, ink, live, fillOutside, lens, motion, browserBackdrop });
+  const latest = useRef({ shapes, backdrop, ink, live, fillOutside, lens, motion, motionReference, browserBackdrop });
   latest.current.shapes = shapes;
   latest.current.backdrop = backdrop;
   latest.current.ink = ink;
@@ -594,6 +604,7 @@ export function GlassLens({
   latest.current.lens = lens;
   latest.current.browserBackdrop = browserBackdrop;
   latest.current.motion = Math.min(5, Math.max(0, motion));
+  latest.current.motionReference = motionReference;
 
   /**
    * 运动惯性状态：两个时间常数不同的跟随点做带通，取差值当"惯性位移"。
@@ -638,8 +649,11 @@ export function GlassLens({
     gl.attachShader(prog, vs);
     gl.attachShader(prog, fs);
     gl.linkProgram(prog);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
       console.error("[GlassLens] link:", gl.getProgramInfoLog(prog));
+      gl.deleteProgram(prog);
       setNoWebgl(true);
       return;
     }
@@ -731,12 +745,22 @@ export function GlassLens({
     const ro = new ResizeObserver(resize);
     ro.observe(canvas);
     resize();
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      glRef.current = null;
+      texRef.current = null;
+      inertia.current.ready = false;
+      dirty.current = true;
+      gl.deleteBuffer(buf);
+      gl.deleteTexture(tex);
+      gl.deleteTexture(inkTex);
+      gl.deleteProgram(prog);
+    };
   }, []);
 
-  // 参数变化 → 重绘（拖动时每个指针事件一帧）
+  // live 由下方 rAF 统一重绘，避免提交 React 更新时重复上传同一帧纹理。
   useEffect(() => {
-    draw();
+    if (!live) draw();
   });
 
   // live：常驻 rAF，每帧重画背面再重绘（球在动、背面在跟着变）
@@ -788,8 +812,9 @@ export function GlassLens({
     const im = inertia.current;
     if (mo > 0 && canvasRef.current) {
       const r = canvasRef.current.getBoundingClientRect();
-      const px = r.left + window.scrollX; // 文档坐标：页面滚动不算玻璃在动
-      const py = r.top + window.scrollY;
+      const origin = latest.current.motionReference?.current?.getBoundingClientRect();
+      const px = r.left - (origin?.left ?? -window.scrollX);
+      const py = r.top - (origin?.top ?? -window.scrollY);
       const now = performance.now();
       if (!im.ready) {
         // 首帧把两个跟随点都放到当前位置，避免从原点"飞"过来产生一次假冲量
@@ -835,7 +860,8 @@ export function GlassLens({
 
     const list = latest.current.shapes;
     /** 按压外鼓量：系数 × --glass-press-swell × 短边，按本玻璃的进度走 */
-    const pressSwell = num("--glass-press-swell", 0.3) * latest.current.lens;
+    const pressProgress = latest.current.lens;
+    const pressSwell = num("--glass-press-swell", 0.3) * (typeof pressProgress === "number" ? pressProgress : pressProgress.current);
     const cen = new Float32Array(SHAPE_MAX * 2);
     const hal = new Float32Array(SHAPE_MAX * 2);
     const rad = new Float32Array(SHAPE_MAX);

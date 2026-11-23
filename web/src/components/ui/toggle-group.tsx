@@ -48,6 +48,7 @@ function updateSegmentCoverage(item: HTMLElement, segment: DOMRect, glass?: DOMR
 
 /** 一个段的盒子（相对 Root 的 padding box） */
 type SegBox = {
+  value: string | null
   x: number
   y: number
   w: number
@@ -59,6 +60,7 @@ const sameBoxes = (a: SegBox[], b: SegBox[]) =>
   a.length === b.length &&
   a.every(
     (s, i) =>
+      s.value === b[i].value &&
       s.x === b[i].x &&
       s.y === b[i].y &&
       s.w === b[i].w &&
@@ -134,9 +136,7 @@ function ToggleGroup({
   const marginRef = React.useRef(0)
   /** 每个段的盒子（相对 Root 的 padding box）：玻璃按它摆位、也按它吸附 */
   const [segs, setSegs] = React.useState<SegBox[]>([])
-  /** 快点也要先完成外鼓，再切回平灰并回缩。 */
-  const [pressed, setPressed] = React.useState(false)
-  const [pressProgress, setPressProgress] = React.useState(0)
+  /** 轮廓、颜色和阴影共用同一进度，不随 React 的渲染时机切换。 */
   const pressProgressRef = React.useRef(0)
   const pointerHeld = React.useRef(false)
   const cancelPressAnimation = React.useRef<(() => void) | null>(null)
@@ -163,12 +163,13 @@ function ToggleGroup({
     const root = rootRef.current
     if (!root) return
     // 段的位置全量量一遍：玻璃要滑到哪一段、松手吸附到哪一段，都从这份盒子算。
-    // 选中态不接管 value / onValueChange，只读 Radix 自己写的 data-state。
+    // 非受控组的选中态读取 Radix 写入的 data-state。
     const read = () => {
       const els = Array.from(
         root.querySelectorAll<HTMLElement>('[data-slot="toggle-group-item"]')
       )
       const next = els.map((el) => ({
+        value: el.getAttribute("data-value"),
         x: el.offsetLeft,
         y: el.offsetTop,
         w: el.offsetWidth,
@@ -184,7 +185,7 @@ function ToggleGroup({
     mo.observe(root, {
       attributes: true,
       subtree: true,
-      attributeFilter: ["data-state"],
+      attributeFilter: ["data-state", "data-value"],
     })
     // 栏宽随文字 / 字号 / 栏数变 → 位置要重量
     const ro = new ResizeObserver(read)
@@ -195,7 +196,9 @@ function ToggleGroup({
     }
   }, [segmented, count])
 
-  const active = segs.findIndex((s) => s.on)
+  const value = props.type === "single" ? props.value : undefined
+  // 受控组直接使用已提交的值，松手时不等 MutationObserver 才离开旧段。
+  const active = segs.findIndex((segment) => value === undefined ? segment.on : segment.value === value)
   const trackMin = segs[0]?.x ?? 0
   const trackMax = segs[segs.length - 1]?.x ?? trackMin
   const clampX = (x: number) => Math.min(Math.max(x, trackMin), trackMax)
@@ -329,23 +332,26 @@ function ToggleGroup({
   /** 用共用的按压曲线从当前进度推进，连点时沿当前轮廓继续。 */
   function animatePress(to: 0 | 1) {
     cancelPressAnimation.current?.()
-    setPressed(to === 1)
     if (pressProgressRef.current === to) return
 
     cancelPressAnimation.current = animateGlassPress(pressProgressRef.current, to, (progress) => {
       pressProgressRef.current = progress
-      setPressProgress(progress)
-      if (progress === 1 && !pointerHeld.current) animatePress(0)
+      glassRef.current?.style.setProperty("--glass-segment-press", String(progress))
+      // 回缩的第一帧也等于 1，只有放大结束才可以切入回缩。
+      if (to === 1 && progress === 1 && !pointerHeld.current) animatePress(0)
     })
   }
 
   function handlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
-    if (!segmented || drag || !segs.length) return
+    if (!segmented || drag || !segs.length || e.button !== 0 || !e.isPrimary) return
     const el =
       e.target instanceof Element
-        ? e.target.closest<HTMLElement>('[data-slot="toggle-group-item"]')
+        ? e.target.closest<HTMLButtonElement>('[data-slot="toggle-group-item"]')
         : null
-    if (!el) return
+    if (!el || el.disabled) return
+    // 捕获在原按钮上，导航栏随页面换位置时也能收到松手事件和正确的 click。
+    el.setPointerCapture(e.pointerId)
+    swallow.current = false
     pointerHeld.current = true
     animatePress(1)
     // 按下即锚定：按到的那一段不是当前选中段就立刻切过去，玻璃当场滑到指针下，不等松手。
@@ -370,10 +376,6 @@ function ToggleGroup({
     if (!drag) return
     const dx = e.clientX - drag.x0
     const moved = drag.moved || Math.abs(dx) > 3
-    // 指针捕获必须等到真拖起来才做：pointerdown 就捕获会把 pointerup 抢到 Root，
-    // 浏览器随之把 click 派发给 Root 而不是那一段 <button>，Radix 收不到点击
-    // ——表现就是"玻璃只外鼓、不换位"。
-    if (moved && !drag.moved) e.currentTarget.setPointerCapture(e.pointerId)
     if (dx === drag.dx && moved === drag.moved) return
     setDrag({ ...drag, dx, moved })
   }
@@ -407,6 +409,14 @@ function ToggleGroup({
     swallow.current = false // 这一发是提交，放行
     el.click()
     swallow.current = true // 后续浏览器补发的 click 继续拦
+  }
+
+  function cancelPointer() {
+    if (!pointerHeld.current) return
+    pointerHeld.current = false
+    swallow.current = false
+    animatePress(0)
+    setDrag(null)
   }
 
   function handleClickCapture(e: React.MouseEvent<HTMLDivElement>) {
@@ -456,15 +466,8 @@ function ToggleGroup({
       onPointerDown={segmented ? handlePointerDown : undefined}
       onPointerMove={segmented ? handlePointerMove : undefined}
       onPointerUp={segmented ? handlePointerUp : undefined}
-      onPointerCancel={
-        segmented
-          ? () => {
-              pointerHeld.current = false
-              animatePress(0)
-              setDrag(null)
-            }
-          : undefined
-      }
+      onPointerCancel={segmented ? cancelPointer : undefined}
+      onLostPointerCapture={segmented ? cancelPointer : undefined}
       onClickCapture={segmented ? handleClickCapture : undefined}
     >
       <ToggleGroupContext.Provider value={{ variant, size, spacing, segmented }}>
@@ -473,6 +476,7 @@ function ToggleGroup({
               <ToggleGroupPrimitive.Item
                 key={item.value}
                 data-slot="toggle-group-item"
+                data-value={item.value}
                 value={item.value}
                 className={cn(SEG_BASE, item.icon ? SEG_STACK : SEG_TEXT)}
               >
@@ -489,7 +493,7 @@ function ToggleGroup({
           ref={glassRef}
           onTransitionEnd={refreshCoverage}
           aria-hidden
-          className="pointer-events-none absolute top-0 left-0 z-20"
+          className="pointer-events-none absolute top-0 left-0 z-20 [--segment-shadow-offset:1px] dark:[--segment-shadow-offset:0px]"
           style={
             {
               translate: `${glassLeft}px ${box.y}px`,
@@ -501,17 +505,16 @@ function ToggleGroup({
               transition: drag?.moved ? "none" : GLIDE,
               // 画布外扩量：GlassLens 的 inset 类读它，与 shapes 的中心同源
               "--lens-margin": `${lensMargin}px`,
+              "--glass-gray": "calc(1 - var(--glass-segment-press, 0))",
+              "--shadow-glass-sm": "0 var(--segment-shadow-offset) 3px color-mix(in srgb, var(--shadow-glass-ink) calc(100% * var(--glass-segment-press, 0)), transparent)",
             } as React.CSSProperties
           }
         >
           <GlassLens
             live
             motion={3}
-            // 平时平灰档（磨砂感的灰），按住切成透明档
-            body={pressed ? "transparent" : "gray"}
-            lens={pressProgress}
-            // 平灰档是贴在底座上的一层灰，不浮起 —— 不给影子；按住换成透明档时才有
-            shadow={pressed ? "sm" : "none"}
+            motionReference={rootRef}
+            lens={pressProgressRef}
             shapes={[
               {
                 cx: lensMargin + box.w / 2,
@@ -525,8 +528,19 @@ function ToggleGroup({
             browserBackdrop
             backdrop={paintTrack}
             ink={paintInk}
+            fallback={
+              <span
+                className="absolute rounded-full"
+                style={{
+                  inset: lensMargin,
+                  backgroundColor: "color-mix(in oklab, var(--muted) calc(100% - 35% * var(--glass-segment-press, 0)), transparent)",
+                  filter: "drop-shadow(var(--shadow-glass-sm))",
+                  scale: "calc(1 + 0.2 * var(--glass-segment-press, 0))",
+                }}
+              />
+            }
             // 单选组单独给 0.10：滑块只轻压背景轨道，不把段里的字明显缩小
-            className="absolute inset-[calc(var(--lens-margin)*-1)] [--glass-lens-compress:0.10] [--glass-lens-decay:0.7] [transition-property:--glass-jade,--glass-gray] duration-[var(--glass-body-duration)] ease-out"
+            className="absolute inset-[calc(var(--lens-margin)*-1)] [--glass-lens-compress:0.10] [--glass-lens-decay:0.7]"
           />
         </span>
       )}
@@ -547,6 +561,7 @@ function ToggleGroupItem({
   return (
     <ToggleGroupPrimitive.Item
       data-slot="toggle-group-item"
+      data-value={props.value}
       data-variant={context.variant || variant}
       data-size={context.size || size}
       data-spacing={context.spacing}
