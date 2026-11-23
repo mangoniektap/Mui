@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils"
 import { ToggleGroup as ToggleGroupPrimitive } from "radix-ui"
 
 import { toggleVariants } from "@/components/ui/toggle"
-import { GlassLens } from "@/styles/surfaces/liquid-glass"
+import { animateGlassPress, GlassLens } from "@/styles/surfaces/liquid-glass"
 
 /**
  * 单选组的一个栏目。
@@ -134,8 +134,13 @@ function ToggleGroup({
   const marginRef = React.useRef(0)
   /** 每个段的盒子（相对 Root 的 padding box）：玻璃按它摆位、也按它吸附 */
   const [segs, setSegs] = React.useState<SegBox[]>([])
-  /** 按住态：交给引擎跑按压进度，同时驱动外鼓与中心凹透镜 */
+  /** 快点也要先完成外鼓，再切回平灰并回缩。 */
   const [pressed, setPressed] = React.useState(false)
+  const [pressProgress, setPressProgress] = React.useState(0)
+  const pressProgressRef = React.useRef(0)
+  const pointerHeld = React.useRef(false)
+  const cancelPressAnimation = React.useRef<(() => void) | null>(null)
+  React.useEffect(() => () => cancelPressAnimation.current?.(), [])
   /** 拖动中：起点、起始段左边缘与宽、累计位移、是否真的拖起来了 */
   const [drag, setDrag] = React.useState<{
     x0: number
@@ -321,6 +326,19 @@ function ToggleGroup({
     []
   )
 
+  /** 用共用的按压曲线从当前进度推进，连点时沿当前轮廓继续。 */
+  function animatePress(to: 0 | 1) {
+    cancelPressAnimation.current?.()
+    setPressed(to === 1)
+    if (pressProgressRef.current === to) return
+
+    cancelPressAnimation.current = animateGlassPress(pressProgressRef.current, to, (progress) => {
+      pressProgressRef.current = progress
+      setPressProgress(progress)
+      if (progress === 1 && !pointerHeld.current) animatePress(0)
+    })
+  }
+
   function handlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
     if (!segmented || drag || !segs.length) return
     const el =
@@ -328,7 +346,8 @@ function ToggleGroup({
         ? e.target.closest<HTMLElement>('[data-slot="toggle-group-item"]')
         : null
     if (!el) return
-    setPressed(true)
+    pointerHeld.current = true
+    animatePress(1)
     // 按下即锚定：按到的那一段不是当前选中段就立刻切过去，玻璃当场滑到指针下，不等松手。
     // 程序化 click 要临时放行（否则被下面的 capture 逻辑当成拖动补发吞掉），
     // 松手后浏览器派发的那次真 click 再拦。
@@ -360,7 +379,8 @@ function ToggleGroup({
   }
 
   function handlePointerUp() {
-    setPressed(false)
+    pointerHeld.current = false
+    if (pressProgressRef.current === 1) animatePress(0)
     if (!drag) return
     const d = drag
     setDrag(null)
@@ -439,7 +459,8 @@ function ToggleGroup({
       onPointerCancel={
         segmented
           ? () => {
-              setPressed(false)
+              pointerHeld.current = false
+              animatePress(0)
               setDrag(null)
             }
           : undefined
@@ -462,7 +483,7 @@ function ToggleGroup({
           : children}
       </ToggleGroupContext.Provider>
       {/* 玻璃是最顶层（z-20）：段在它下面，内容由背纹理重绘后透过玻璃看。
-          按压外鼓 / 中心凹透镜 / 运动惯性都交给引擎，组件只给状态与几何。 */}
+          组件负责按压阶段，引擎按进度计算外鼓，并处理折射和运动惯性。 */}
       {segmented && box && (
         <span
           ref={glassRef}
@@ -488,7 +509,7 @@ function ToggleGroup({
             motion={3}
             // 平时平灰档（磨砂感的灰），按住切成透明档
             body={pressed ? "transparent" : "gray"}
-            pressed={pressed}
+            lens={pressProgress}
             // 平灰档是贴在底座上的一层灰，不浮起 —— 不给影子；按住换成透明档时才有
             shadow={pressed ? "sm" : "none"}
             shapes={[

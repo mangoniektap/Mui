@@ -11,7 +11,10 @@ export type BarSurfaceProps = Omit<React.ComponentProps<"div">, "ref"> & {
 const DECAY = 3;
 const MIN_CLARITY = 0;
 const STOPS = 24;
-const BLUR = "blur(var(--bar-frost-blur, 12px))";
+const BLUR_RADIUS = "var(--bar-frost-blur, 12px)";
+const BLUR = `blur(${BLUR_RADIUS})`;
+const SAMPLE_MARGIN = `calc(3 * ${BLUR_RADIUS})`;
+const SAMPLE_INSET = `calc(-1 * ${SAMPLE_MARGIN})`;
 
 /**
  * 磨砂层的不透明度 = 1 − 通透度，用 mask 的 alpha 承载这条曲线。
@@ -38,7 +41,12 @@ export function BarSurface({
   children,
   ...props
 }: BarSurfaceProps) {
-  const mask = React.useMemo(() => frostMask(bottom), [bottom]);
+  // 背景滤镜以元素边框为采样边界。只在通透侧外扩三个模糊半径，
+  // 让栏外的内容也能平滑影响栏内亮度，蒙版仍按原始栏高渐变。
+  const mask = React.useMemo(
+    () => `${frostMask(bottom)} ${bottom ? "bottom" : "top"} / 100% calc(100% - ${SAMPLE_MARGIN}) no-repeat`,
+    [bottom]
+  );
 
   // 顶栏横向占满；底栏只占右侧内容区（左边让开 w-60 侧栏，小屏侧栏隐藏则占满）。
   // 内联 position:fixed 压住调用点的 sticky，保证条带贴在视口边上。
@@ -56,12 +64,14 @@ export function BarSurface({
       <div
         aria-hidden
         data-slot="bar-frost"
-        className="pointer-events-none absolute inset-0 -z-10"
+        className="pointer-events-none absolute inset-x-0 -z-10"
         style={{
+          top: bottom ? SAMPLE_INSET : 0,
+          bottom: bottom ? 0 : SAMPLE_INSET,
           backdropFilter: BLUR,
           WebkitBackdropFilter: BLUR,
-          maskImage: mask,
-          WebkitMaskImage: mask,
+          mask,
+          WebkitMask: mask,
         }}
       />
       {children}

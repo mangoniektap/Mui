@@ -77,7 +77,7 @@ uniform float uBendBand; // --glass-lens-band    斜面宽度系数
 uniform float uBend; // --glass-lens-bend      静止态放大率 - 1
 uniform float uCompress; // --glass-lens-compress 中心凹透镜压缩率（常驻）：m = 1 - 本值
 // 凹透镜常驻：强度只有 uCompress 一个来源，按压进度不参与光学（只管外鼓 / 换档）
-uniform float uChroma; // --glass-lens-chroma   色散宽度（像素，非倍率）
+uniform float uChroma; // --glass-lens-chroma   R/B 采样间距（像素，非倍率）
 uniform float uSpan; // --glass-lens-span    斜面固定带宽段的半长 / 半高
 uniform float uDecay; // --glass-lens-decay   斜面归零位置：0.5 = 顶/底，越大越早归零
 uniform float uBody; // 玉白权重 0..1（本体档位 0→1 段）
@@ -203,8 +203,7 @@ void main() {
     mc = max(mc, 0.25); // 压缩再狠也不许除以 0
     float shift = length(vv) * (1.0 - 1.0 / m); // 放大率换算成该点的像素位移
 
-    // ② 色散：只发生在斜面内；斜面是等斜率切角，窗口取平顶，只在内沿收尾。
-    //    错开方向也用同一条法线，彩边才贴着轮廓走；上下端 taper = 0 时一并消失。
+    // ② 色散与折射共用斜面，从外轮廓开始，在斜面内沿渐隐。
     float o = uChroma * opt * taper * smoothstep(0.0, 0.35, wRaw);
     vec2 q = vv / mc - n * shift;
     // 只夹「色散相对 q 额外造成的越界」，保留 q 本身跑出轮廓的部分。
@@ -217,22 +216,29 @@ void main() {
     float overQ = max(sdRoundRect(q, hv, br), 0.0);
     tapR -= n * max(max(sdRoundRect(tapR, hv, br), 0.0) - overQ, 0.0) * w;
     tapB -= n * max(max(sdRoundRect(tapB, hv, br), 0.0) - overQ, 0.0) * w;
+
+    vec4 trackR = texture2D(uTex, (uCenter[i] + tapR) / uRes);
+    vec4 trackG = texture2D(uTex, (uCenter[i] + q) / uRes);
+    vec4 trackB = texture2D(uTex, (uCenter[i] + tapB) / uRes);
+    float sharedCoverage = min(trackG.a, min(trackR.a, trackB.a));
     if (uDisplacementChannel > 0) {
       vec2 tap = uDisplacementChannel == 1 ? tapR : uDisplacementChannel == 3 ? tapB : q;
+      // 轨道及其阴影的色散由画布合成。浏览器层在这些区域统一采样，防止接缝重复染色。
+      float trackCoverage = max(trackG.a, max(trackR.a, trackB.a));
+      tap = mix(tap, q, smoothstep(0.0, 0.02, trackCoverage));
       vec2 offset = (uCenter[i] + tap - p) / uDisplacementScale;
       vec2 encoded = clamp(vec2(0.5) + offset, 0.0, 1.0);
       gl_FragColor = vec4(encoded * cov, 0.0, cov);
       return;
     }
 
-    vec4 trackR = texture2D(uTex, (uCenter[i] + tapR) / uRes);
-    vec4 trackG = texture2D(uTex, (uCenter[i] + q) / uRes);
-    vec4 trackB = texture2D(uTex, (uCenter[i] + tapB) / uRes);
     vec3 sc = vec3(trackR.r, trackG.g, trackB.b);
     vec3 opacity = vec3(1.0);
     if (uBrowserBackdrop > 0.5) {
-      opacity = vec3(trackR.a, trackG.a, trackB.a);
-      sc *= opacity;
+      // 轨道叠在浏览器背景上时只能有一个覆盖率。三通道有采样落到透明处时，
+      // 按共同覆盖率收回到中心采样的颜色，避免轨道边出现高饱和彩环。
+      opacity = vec3(trackG.a);
+      sc = mix(trackG.rgb, sc, sharedCoverage) * opacity;
     }
 
     // 内容层只走凸透镜位移，不除 mc：文字 / 图标被折射但尺寸不变。
@@ -443,10 +449,12 @@ export function animateGlassPress(
   onUpdate: (v: number) => void
 ) {
   const dur = Math.max(tokenNum("--glass-press-duration", 150), 1);
-  const t0 = performance.now();
+  let start: number | undefined;
   let raf = 0;
-  const step = () => {
-    const t = Math.min(1, (performance.now() - t0) / dur);
+  const step = (now: number) => {
+    // 页面切换可能推迟首帧，从 rAF 真正开始时计时，避免第一帧跳到中途。
+    start ??= now;
+    const t = Math.min(1, (now - start) / dur);
     onUpdate(from + (to - from) * (1 - (1 - t) * (1 - t)));
     if (t < 1) raf = requestAnimationFrame(step);
   };
@@ -928,8 +936,10 @@ export function GlassLens({
         const scale = Math.max(width, height) * (
           Math.abs(1 / Math.max(1 - compress, 0.25) - 1) + Math.abs(bend) + im.strain
         ) + Math.abs(chroma) + 2;
+        // 轨道边界参与生成位移图，玻璃平移且形状不变时也要更新。
+        const { x, y } = canvas.getBoundingClientRect();
         const key = [width, height, dpr, bendBand, bend, compress, chroma, span, decay, jade, gray,
-          im.axis, im.strain, ...cen, ...hal, ...rad, ...bul]
+          x, y, im.axis, im.strain, ...cen, ...hal, ...rad, ...bul]
           .map((value) => Math.round(value * 100)).join(",");
         page.publish({
           key, width, height, scale,
