@@ -1,6 +1,7 @@
+/** @file Compose 液态玻璃的动画、几何与离屏渲染。 */
 package com.mui.glass
 
-import android.graphics.RuntimeShader
+import android.graphics.RenderEffect
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.EaseOut
@@ -17,23 +18,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Canvas
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asComposeRenderEffect
-import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
@@ -47,8 +44,8 @@ import kotlin.math.roundToInt
 /** easeOutQuad：起步快、越走越慢（= animateGlassPress 的曲线） */
 val EaseOutQuad: Easing = Easing { t -> 1f - (1f - t) * (1f - t) }
 
-/** 玻璃影子的档位查表结果：颜色 / 偏移 / 模糊（dp） */
-data class GlassShadowParams(val color: androidx.compose.ui.graphics.Color, val dx: Float, val dy: Float, val blur: Float)
+/** 玻璃影子的档位查表结果：颜色 / 偏移 / 模糊。 */
+data class GlassShadowParams(val color: Color, val dx: Float, val dy: Float, val blur: Float)
 
 /**
  * 运动惯性状态：两个时间常数不同的跟随点之差（带通位移）。
@@ -87,25 +84,24 @@ class GlassInertiaState {
     private var fastY = 0f
     private var slowX = 0f
     private var slowY = 0f
-    private var lastT = 0f
+    private var lastFrameNanos = 0L
 
     /** 每帧推进（nowNanos = 帧时钟），只量 position 的变化 */
     fun step(nowNanos: Long, motion: Int) {
         val px = position.x
         val py = position.y
-        val now = nowNanos / 1_000_000f
         if (!ready) {
             fastX = px
             slowX = px
             fastY = py
             slowY = py
-            lastT = now
+            lastFrameNanos = nowNanos
             ready = true
             strain = 0f
             axis = 0
             return
         }
-        val dt = ((now - lastT) / 1000f).coerceIn(0.001f, 0.05f)
+        val dt = ((nowNanos - lastFrameNanos) / 1_000_000_000f).coerceIn(0.001f, 0.05f)
         val kf = 1f - exp(-dt / 0.02f)
         val ks = 1f - exp(-dt / 0.055f)
         fastX += (px - fastX) * kf
@@ -128,7 +124,7 @@ class GlassInertiaState {
         // target 已两级平滑，只做一阶跟随：二阶弹簧会过冲并拖出慢动作。
         // 20/55/28ms 三条时间常数让起步跟手、回落干脆，不再粘稠
         strain += (target - strain) * (1f - exp(-dt / 0.028f))
-        lastT = now
+        lastFrameNanos = nowNanos
     }
 
     /** 档位关闭：全部清零，下一轮重新起算 */
@@ -142,7 +138,7 @@ class GlassInertiaState {
 /**
  * 液态玻璃画布（引擎唯一出口，对应 web 版 <GlassLens>）。
  *
- * 节点内容 = 调用方画进离屏位图的背面（页面 / 轨道 / 图像），经 AGSL shader
+ * 节点内容 = 调用方画进离屏图层的背面（页面 / 轨道 / 图像），经 AGSL shader
  * 逐像素折射 / 色散 / 本体 / 边缘后输出；轮廓外只画影子。主题 / 参数变化自动重绘。
  *
  * @param shapes 最多 [GLASS_SHAPE_MAX] 块，按顺序叠（后面的盖前面），坐标为画布左上角 dp
@@ -173,36 +169,55 @@ fun GlassLens(
     lensCompress: Float? = null,
     lensDecay: Float? = null,
     shadow: GlassShadowLevel = GlassShadowLevel.SM,
-    /** 可选内容层（文字 / 图标，透明底）：单独注入 uInk，只折射不缩小 */
+    /** 可选内容层（文字 / 图标，透明底），只折射不缩小。 */
+    ink: (DrawScope.() -> Unit)? = null,
+    backdrop: DrawScope.() -> Unit,
+) = GlassLens(
+    pageColor = Color.Unspecified,
+    shapes = shapes,
+    modifier = modifier,
+    live = live,
+    fillOutside = fillOutside,
+    motion = motion,
+    body = body,
+    pressed = pressed,
+    lens = lens,
+    lensBand = lensBand,
+    lensCompress = lensCompress,
+    lensDecay = lensDecay,
+    shadow = shadow,
+    ink = ink,
+    backdrop = backdrop,
+)
+
+/** 控件专用入口。页面图层先录入背面，再叠上随控件移动的轨道。 */
+@Composable
+internal fun GlassLens(
+    pageColor: Color,
+    shapes: List<LensShape>,
+    modifier: Modifier = Modifier,
+    live: Boolean = false,
+    fillOutside: Boolean = false,
+    motion: Int = 0,
+    body: GlassBody = GlassBody.TRANSPARENT,
+    pressed: Boolean = false,
+    lens: Float? = null,
+    lensBand: Float? = null,
+    lensCompress: Float? = null,
+    lensDecay: Float? = null,
+    shadow: GlassShadowLevel = GlassShadowLevel.SM,
     ink: (DrawScope.() -> Unit)? = null,
     backdrop: DrawScope.() -> Unit,
 ) {
-    val density = LocalDensity.current
-    val layoutDirection = LocalLayoutDirection.current
     val glassPalette = com.mui.theme.LocalGlassPalette.current
     val isDark = com.mui.theme.LocalIsDark.current
-
+    val densityScale = LocalDensity.current.density
+    val source = LocalGlassBackdrop.current.takeIf { pageColor != Color.Unspecified }
+    var lensOrigin by remember(source) { mutableStateOf<Offset?>(null) }
     val shader = remember { GlassShaderSource.compile() }
-    /* ⚠️ renderEffect 必须每帧新建：Compose 的 graphicsLayer 靠「参数变了」才会
-       重新配置并 invalidate 图层。复用同一个 RenderEffect 对象时参数恒等，图层停在第一帧
-       （那时 uRes 还是 1×1、SDF 全在画布外），整块玻璃直接消失。
-       屏闪的根因不是它，是 ink 位图与 backdrop 分处两个阶段更新 —— 那个在下面单独修。 */
-    val bitmapRef = remember { mutableStateOf<ImageBitmap?>(null) }
-    val inkBitmapRef = remember { mutableStateOf<ImageBitmap?>(null) }
-    val inkFallback = remember { ImageBitmap(1, 1) }
-    /** 已绑到 uInk 的位图（普通引用，不参与 snapshot 失效） */
-    val boundInkRef = remember { arrayOfNulls<ImageBitmap?>(1) }
-    val drawScopeHelper = remember { CanvasDrawScope() }
+    val input = rememberGraphicsLayer()
     val inertia = remember { GlassInertiaState() }
     val frameTick = remember { mutableIntStateOf(0) }
-
-    /* 画布尺寸在**组合期**拿出来（onSizeChanged 写 state → 触发重组），
-       再当成普通值捕获进 graphicsLayer 的块里。
-       不能在块内读 `size`：图层参数只在节点第一次落位时算一遍，那一刻尺寸还是 0，
-       而"从 0 变成真值"不会让块重跑 —— effect 会永远带着 uRes = 1×1。 */
-    var nodeSize by remember { mutableStateOf(IntSize.Zero) }
-    val canvasW = nodeSize.width.toFloat()
-    val canvasH = nodeSize.height.toFloat()
 
     // 按压进度：easeOutQuad，时长 = --glass-press-duration
     val press = remember { Animatable(0f) }
@@ -222,202 +237,109 @@ fun GlassLens(
         animationSpec = tween(GlassTokens.bodyDurationMs.roundToInt(), easing = EaseOut),
     )
 
-    // 常驻帧循环：live 逐帧重绘；motion>0 时顺带推进惯性
-    val running = live || motion > 0
-    LaunchedEffect(running, motion) {
-        if (!running) {
-            inertia.reset()
-            return@LaunchedEffect
-        }
-        while (true) {
+    LaunchedEffect(live, motion) {
+        if (motion <= 0) inertia.reset()
+        while (live || motion > 0) {
             val nanos = withFrameNanos { it }
             if (motion > 0) inertia.step(nanos, motion)
             if (live) frameTick.value++
         }
     }
 
-    // 影子档位（亮/暗两套）
-    val shadowSpec = remember(shadow, isDark) {
-        val table = if (isDark) MuiElevation.glassShadowDark else MuiElevation.glassShadowLight
-        if (shadow == GlassShadowLevel.NONE) null
-        else table[shadow.key]?.let { spec ->
-            with(density) {
-                GlassShadowParams(spec.color, spec.dx.toPx(), spec.dy.toPx(), spec.blur.toPx())
-            }
-        }
-    }
+    val shadowSpec = (if (isDark) MuiElevation.glassShadowDark else MuiElevation.glassShadowLight)[shadow.key]
 
     Box(
         modifier
-            .onSizeChanged { nodeSize = it }
-            .onGloballyPositioned { inertia.position = it.positionInRoot() }
-            /* ① 折射层。**必须排在 drawBehind 之前**：这一层就是 web 那面 canvas，
-               它的内容 = 下面画出来的背面，着色器折的就是它。
-               顺序反了（drawBehind 在前）背面会落在图层外面，uTex 是空的 ——
-               折空场等于不折，光学特性会整块消失。
-               `size` 从图层作用域读（绘制期），不在组合期量。 */
-            .graphicsLayer {
-                frameTick.value // live 时逐帧重建 effect，保证 uniform 生效
-                val dpr = density.density
-                /* 尺寸来自组合期捕获的值（见上方 canvasW/canvasH）。
-                   这里**不早退**：块可能带着 0 尺寸跑一次，早退会把 renderEffect 留成 null，
-                   而下一帧不会因为"尺寸变了"自动重来。 */
-                val w = canvasW.coerceAtLeast(1f)
-                val h = canvasH.coerceAtLeast(1f)
-                val pressSwell = GlassTokens.pressSwell * (lens ?: press.value)
-                val cen = FloatArray(GLASS_SHAPE_MAX * 2)
-                val hal = FloatArray(GLASS_SHAPE_MAX * 2)
-                val rad = FloatArray(GLASS_SHAPE_MAX)
-                val bul = FloatArray(GLASS_SHAPE_MAX)
-                for (i in 0 until GLASS_SHAPE_MAX) {
-                    val s = shapes.getOrNull(i)
-                    // 没用到的槽位必须停到画布外（web 的 EMPTY 是 cx/cy = -1e4）。
-                    // 留全 0 的话 SDF 在画布原点退化成一个半径 0 的点，那一点 cov = 1，
-                    // 于是一颗灰点正好落在玻璃画布的左上角。
-                    if (s == null) {
-                        cen[i * 2] = -1e4f
-                        cen[i * 2 + 1] = -1e4f
-                        continue
-                    }
-                    cen[i * 2] = s.cx * dpr
-                    cen[i * 2 + 1] = s.cy * dpr
-                    hal[i * 2] = s.hw * dpr
-                    hal[i * 2 + 1] = s.hh * dpr
-                    rad[i] = s.radius * dpr
-                    bul[i] = (s.bulge + s.swell * min(s.hw, s.hh) * 2f * pressSwell) * dpr
-                }
-                shader.setFloatUniform("uRes", floatArrayOf(w.toFloat(), h.toFloat()))
-                shader.setFloatUniform("uCenter", cen)
-                shader.setFloatUniform("uHalf", hal)
-                shader.setFloatUniform("uRadius", rad)
-                shader.setFloatUniform("uBulge", bul)
-                shader.setFloatUniform("uBendBand", floatArrayOf(lensBand ?: GlassTokens.lensBand))
-                shader.setFloatUniform("uBend", floatArrayOf(GlassTokens.lensBend))
-                shader.setFloatUniform("uCompress", floatArrayOf(lensCompress ?: GlassTokens.lensCompress))
-                shader.setFloatUniform("uChroma", floatArrayOf(GlassTokens.lensChromaDp * dpr))
-                shader.setFloatUniform("uSpan", floatArrayOf(GlassTokens.lensSpan))
-                shader.setFloatUniform("uDecay", floatArrayOf(lensDecay ?: GlassTokens.lensDecay))
-                shader.setFloatUniform("uBody", floatArrayOf(jade))
-                shader.setFloatUniform("uGray", floatArrayOf(gray))
-                shader.setFloatUniform(
-                    "uGrayColor",
-                    floatArrayOf(glassPalette.grayColor.red, glassPalette.grayColor.green, glassPalette.grayColor.blue),
-                )
-                shader.setFloatUniform("uAlpha", floatArrayOf(1f - (1f - GlassTokens.grayAlpha) * gray))
-                shader.setFloatUniform(
-                    "uBodyColor",
-                    floatArrayOf(glassPalette.bodyColor.red, glassPalette.bodyColor.green, glassPalette.bodyColor.blue),
-                )
-                shader.setFloatUniform("uBodyShade", floatArrayOf(GlassTokens.bodyShade))
-                shader.setFloatUniform("uBodyPeak", floatArrayOf(GlassTokens.bodyPeak))
-                shader.setFloatUniform("uBodyFadeX", floatArrayOf(GlassTokens.bodyFadeX))
-                shader.setFloatUniform(
-                    "uRimLight",
-                    floatArrayOf(glassPalette.rimLight.red, glassPalette.rimLight.green, glassPalette.rimLight.blue),
-                )
-                shader.setFloatUniform(
-                    "uRimDark",
-                    floatArrayOf(glassPalette.rimDark.red, glassPalette.rimDark.green, glassPalette.rimDark.blue),
-                )
-                shader.setFloatUniform("uRimTop", floatArrayOf(glassPalette.rimTop))
-                shader.setFloatUniform("uRimBottom", floatArrayOf(glassPalette.rimBottom))
-                shader.setFloatUniform("uRimSide", floatArrayOf(glassPalette.rimSide))
-                // rimWidth 传 dp：着色器里自己乘 uDpr（web 也是 px 原值 × dpr 一次）。
-                // 这里再乘一遍 dpr 会让边缘窗口宽度翻倍（2dp → 9px 而非 4.5px），
-                // 白心被啃掉一圈，开关的球看起来偏小、边缘发脏。
-                shader.setFloatUniform("uRimWidth", floatArrayOf(GlassTokens.rimWidthDp))
-                shader.setFloatUniform(
-                    "uMotionAxis",
-                    if (inertia.axis == 0) floatArrayOf(1f, 0f) else floatArrayOf(0f, 1f),
-                )
-                shader.setFloatUniform("uMotionAmp", floatArrayOf(if (motion > 0) inertia.strain else 0f))
-                shader.setFloatUniform("uDpr", floatArrayOf(dpr))
-                shader.setFloatUniform("uFill", floatArrayOf(if (fillOutside) 1f else 0f))
-                if (shadowSpec != null) {
-                    shader.setColorUniform("uShadowColor", shadowSpec.color.toArgb())
-                    shader.setFloatUniform("uShadowOffset", floatArrayOf(shadowSpec.dx * dpr, shadowSpec.dy * dpr))
-                    shader.setFloatUniform("uShadowBlur", floatArrayOf(shadowSpec.blur * dpr))
-                } else {
-                    // uShadowColor 是 layout(color)，只能用 color API 设；透明档传 TRANSPARENT
-                    shader.setColorUniform("uShadowColor", android.graphics.Color.TRANSPARENT)
-                    shader.setFloatUniform("uShadowOffset", floatArrayOf(0f, 0f))
-                    shader.setFloatUniform("uShadowBlur", floatArrayOf(1f))
-                }
-                /* 内容层（第二张位图 uInk）只在这里**绑定**：
-                   位图与 BitmapShader 只在尺寸变化时新建，内容由 drawBehind 与
-                   backdrop 同一次 draw 重画（见下）。两层各自负责压缩 / 不压缩的语义不变。
-                   早先两者分处两个阶段且每帧重建 GPU 资源，采样会错开一帧。 */
-                if (ink != null && w > 0f && h > 0f) {
-                    val iw = w.toInt().coerceAtLeast(1)
-                    val ih = h.toInt().coerceAtLeast(1)
-                    val ibmp = inkBitmapRef.value
-                        ?.takeIf { it.width == iw && it.height == ih }
-                        ?: ImageBitmap(iw, ih).also { inkBitmapRef.value = it }
-                    if (boundInkRef[0] !== ibmp) {
-                        shader.setInputShader(
-                            "uInk",
-                            android.graphics.BitmapShader(
-                                ibmp.asAndroidBitmap(),
-                                android.graphics.Shader.TileMode.CLAMP,
-                                android.graphics.Shader.TileMode.CLAMP,
-                            ),
-                        )
-                        boundInkRef[0] = ibmp
-                    }
-                    shader.setFloatUniform("uHasInk", floatArrayOf(1f))
-                } else {
-                    if (boundInkRef[0] !== inkFallback) {
-                        shader.setInputShader(
-                            "uInk",
-                            android.graphics.BitmapShader(
-                                inkFallback.asAndroidBitmap(),
-                                android.graphics.Shader.TileMode.CLAMP,
-                                android.graphics.Shader.TileMode.CLAMP,
-                            ),
-                        )
-                        boundInkRef[0] = inkFallback
-                    }
-                    shader.setFloatUniform("uHasInk", floatArrayOf(0f))
-                }
-                renderEffect = android.graphics.RenderEffect
-                    .createRuntimeShaderEffect(shader, "uTex")
-                    .asComposeRenderEffect()
+            .onGloballyPositioned {
+                val position = it.localToRoot(Offset.Zero)
+                inertia.position = position / densityScale
+                if (source != null) lensOrigin = position
             }
-            /* ② 背面。画进上面那个图层里 —— 它是 uTex 的唯一来源，
-               上屏时会被着色器的输出整个换掉，所以这里画的不是"玻璃"，是"玻璃背后的画面"。 */
-            .drawBehind {
-                frameTick.value // live：背面跟着球走 / 状态变
-                /* 尺寸还没经组合期回流之前先不画：那一刻着色器的 uRes 还是 1×1，
-                   画了也会被折成一片糊。等下一帧尺寸到位再画。 */
-                if (canvasW <= 0f || canvasH <= 0f) return@drawBehind
-                val w = size.width
-                val h = size.height
-                if (w <= 0f || h <= 0f) return@drawBehind
-                val wi = w.toInt()
-                val hi = h.toInt()
-                val bmp = bitmapRef.value
-                    ?.takeIf { it.width == wi && it.height == hi }
-                    ?: ImageBitmap(wi, hi).also { bitmapRef.value = it }
-                drawScopeHelper.draw(density, layoutDirection, Canvas(bmp), Size(w, h)) {
-                    backdrop()
+            .drawWithCache {
+                val width = size.width.roundToInt()
+                val height = size.height.roundToInt()
+                if (width == 0 || height == 0) return@drawWithCache onDrawBehind {}
+
+                val dpr = density
+                val pressSwell = GlassTokens.pressSwell * (lens ?: press.value)
+                val centers = FloatArray(GLASS_SHAPE_MAX * 2) { -1e4f }
+                val halves = FloatArray(GLASS_SHAPE_MAX * 2)
+                val radii = FloatArray(GLASS_SHAPE_MAX)
+                val bulges = FloatArray(GLASS_SHAPE_MAX)
+                shapes.take(GLASS_SHAPE_MAX).forEachIndexed { index, shape ->
+                    centers[index * 2] = shape.cx * dpr
+                    centers[index * 2 + 1] = shape.cy * dpr
+                    halves[index * 2] = shape.hw * dpr
+                    halves[index * 2 + 1] = shape.hh * dpr
+                    radii[index] = shape.radius * dpr
+                    bulges[index] = (shape.bulge + shape.swell * min(shape.hw, shape.hh) * 2f * pressSwell) * dpr
                 }
-                // ink 与 backdrop 必须在同一次 draw 里更新：uTex 采的是本节点的绘制结果，
-                // uInk 采的是这张 CPU 位图，两者错开一个阶段就会逐帧相差一帧。
-                if (ink != null) {
-                    inkBitmapRef.value?.let { ibmp ->
-                        ibmp.asAndroidBitmap().eraseColor(android.graphics.Color.TRANSPARENT)
-                        drawScopeHelper.draw(
-                            density,
-                            layoutDirection,
-                            Canvas(ibmp),
-                            Size(ibmp.width.toFloat(), ibmp.height.toFloat()),
-                        ) {
-                            ink()
+
+                shader.setFloatUniform("uRes", width.toFloat(), height.toFloat())
+                shader.setFloatUniform("uCenter", centers)
+                shader.setFloatUniform("uHalf", halves)
+                shader.setFloatUniform("uRadius", radii)
+                shader.setFloatUniform("uBulge", bulges)
+                shader.setFloatUniform("uBendBand", lensBand ?: GlassTokens.lensBand)
+                shader.setFloatUniform("uBend", GlassTokens.lensBend)
+                shader.setFloatUniform("uCompress", lensCompress ?: GlassTokens.lensCompress)
+                shader.setFloatUniform("uChroma", GlassTokens.lensChromaDp * dpr)
+                shader.setFloatUniform("uSpan", GlassTokens.lensSpan)
+                shader.setFloatUniform("uDecay", lensDecay ?: GlassTokens.lensDecay)
+                shader.setFloatUniform("uBody", jade)
+                shader.setFloatUniform("uGray", gray)
+                shader.setColorUniform("uGrayColor", glassPalette.grayColor.toArgb())
+                shader.setFloatUniform("uAlpha", 1f - (1f - GlassTokens.grayAlpha) * gray)
+                shader.setColorUniform("uBodyColor", glassPalette.bodyColor.toArgb())
+                shader.setFloatUniform("uBodyShade", GlassTokens.bodyShade)
+                shader.setFloatUniform("uBodyPeak", GlassTokens.bodyPeak)
+                shader.setFloatUniform("uBodyFadeX", GlassTokens.bodyFadeX)
+                shader.setColorUniform("uRimLight", glassPalette.rimLight.toArgb())
+                shader.setColorUniform("uRimDark", glassPalette.rimDark.toArgb())
+                shader.setFloatUniform("uRimTop", glassPalette.rimTop)
+                shader.setFloatUniform("uRimBottom", glassPalette.rimBottom)
+                shader.setFloatUniform("uRimSide", glassPalette.rimSide)
+                shader.setFloatUniform("uRimWidth", GlassTokens.rimWidthDp)
+                val horizontal = inertia.axis == 0
+                shader.setFloatUniform("uMotionAxis", if (horizontal) 1f else 0f, if (horizontal) 0f else 1f)
+                shader.setFloatUniform("uMotionAmp", if (motion > 0) inertia.strain else 0f)
+                shader.setFloatUniform("uDpr", dpr)
+                shader.setFloatUniform("uFill", if (fillOutside) 1f else 0f)
+                shader.setFloatUniform("uHasInk", if (ink == null) 0f else 1f)
+                shader.setColorUniform("uShadowColor", shadowSpec?.color?.toArgb() ?: android.graphics.Color.TRANSPARENT)
+                shader.setFloatUniform("uShadowOffset", shadowSpec?.dx?.toPx() ?: 0f, shadowSpec?.dy?.toPx() ?: 0f)
+                shader.setFloatUniform("uShadowBlur", shadowSpec?.blur?.toPx() ?: 0f)
+                input.renderEffect = RenderEffect.createRuntimeShaderEffect(shader, "uTex").asComposeRenderEffect()
+
+                onDrawBehind {
+                    if (live) frameTick.intValue
+                    val viewport = size
+                    // 两份输入在同一张 GPU 图层里连续录制。每块都裁到逻辑画布范围，
+                    // shader 采样时再分别夹取，防止折射越界串到另一块。
+                    input.record(this, layoutDirection, IntSize(width, if (ink == null) height else height * 2)) {
+                        clipRect(right = viewport.width, bottom = viewport.height) {
+                            drawContext.size = viewport
+                            if (pageColor != Color.Unspecified) drawRect(pageColor)
+                            val pageOrigin = source?.origin
+                            val glassOrigin = lensOrigin
+                            if (source != null && pageOrigin != null && glassOrigin != null) {
+                                val offset = pageOrigin - glassOrigin
+                                translate(offset.x, offset.y) { drawLayer(source.layer) }
+                            }
+                            backdrop()
+                        }
+                        if (ink != null) {
+                            translate(top = viewport.height) {
+                                clipRect(right = viewport.width, bottom = viewport.height) {
+                                    drawContext.size = viewport
+                                    ink()
+                                }
+                            }
                         }
                     }
+                    clipRect { drawLayer(input) }
                 }
-                drawImage(bmp)
-            }
+            },
     )
 }
 

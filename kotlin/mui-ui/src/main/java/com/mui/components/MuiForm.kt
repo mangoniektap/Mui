@@ -10,6 +10,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mui.theme.LocalMuiContentColor
 import com.mui.theme.LocalMuiPalette
 
 /** 当前表单的提交回调（嵌套控件可读取；null = 不在 MuiForm 内） */
@@ -19,7 +20,6 @@ val LocalMuiFormSubmit = staticCompositionLocalOf<(() -> Unit)?> { null }
  * 表单容器（form.tsx 的 Form）：Column + 提交回调。
  * 输入 = 提交回调 + 内容槽；输出 = LocalMuiFormSubmit 提供给嵌套控件（如输入框 ImeAction.Done 触发）。
  * 硬约束：禁 material3；web 的 react-hook-form 状态管理未移植，字段值/校验由调用方自持。
- * TODO: web 的 FormProvider / useFormContext 上下文状态机未移植。
  *
  * @param onSubmit 提交回调（经 LocalMuiFormSubmit 广播给嵌套控件）
  * @param modifier 布局修饰
@@ -56,8 +56,15 @@ fun MuiFormField(
     content: @Composable () -> Unit,
 ) {
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        CompositionLocalProvider(LocalMuiFormFieldName provides name) {
-            MuiLabel(text = label)
+        val invalid = !error.isNullOrEmpty()
+        val labelColor = if (invalid) LocalMuiPalette.current.destructive else LocalMuiContentColor.current
+        CompositionLocalProvider(
+            LocalMuiFormFieldName provides name,
+            LocalMuiFormFieldInvalid provides invalid,
+        ) {
+            CompositionLocalProvider(LocalMuiContentColor provides labelColor) {
+                MuiLabel(text = label)
+            }
             content()
             MuiFormMessage(message = error)
         }
@@ -66,6 +73,7 @@ fun MuiFormField(
 
 /** 当前 MuiFormField 的字段名（嵌套控件可读取作标识） */
 val LocalMuiFormFieldName = staticCompositionLocalOf { "" }
+internal val LocalMuiFormFieldInvalid = staticCompositionLocalOf { false }
 
 /**
  * 表单消息（FormMessage）：text-sm text-destructive；空消息不占位。

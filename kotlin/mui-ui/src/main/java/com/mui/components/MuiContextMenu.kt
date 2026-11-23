@@ -7,12 +7,13 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -20,12 +21,15 @@ import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.window.PopupPositionProvider
 import com.mui.theme.rememberMuiInteractionSource
 import kotlin.math.roundToInt
 
-// TODO: web 的 Esc 关闭与方向键导航未移植（键盘交互可选）
 
 /**
  * 上下文菜单：触发器槽长按（combinedClickable.onLongClick）或右键打开 Popup 菜单。
@@ -56,6 +60,7 @@ fun MuiContextMenu(
         onOpenChange?.invoke(next)
     }
 
+    val latestOpen by rememberUpdatedState<(Boolean) -> Unit> { setOpen(it) }
     var pressOffset by remember { mutableStateOf(Offset.Zero) }
     var containerSize by remember { mutableStateOf(0 to 0) }
     val interactionSource = rememberMuiInteractionSource()
@@ -74,9 +79,10 @@ fun MuiContextMenu(
                     while (true) {
                         val event = awaitPointerEvent(pass = PointerEventPass.Initial)
                         val change = event.changes.firstOrNull { it.pressed }
+                        if (change != null && !change.previousPressed) pressOffset = change.position
                         if (change != null && event.buttons.isSecondaryPressed) {
                             pressOffset = change.position
-                            setOpen(true)
+                            latestOpen(true)
                             change.consume()
                             break
                         }
@@ -89,13 +95,31 @@ fun MuiContextMenu(
         if (isOpen) {
             val x = pressOffset.x.roundToInt().coerceIn(0, containerSize.first)
             val y = pressOffset.y.roundToInt().coerceIn(0, containerSize.second)
+            val position = remember(x, y) {
+                object : PopupPositionProvider {
+                    override fun calculatePosition(
+                        anchorBounds: IntRect,
+                        windowSize: IntSize,
+                        layoutDirection: LayoutDirection,
+                        popupContentSize: IntSize,
+                    ): IntOffset {
+                        val screenX = anchorBounds.left + x
+                        val screenY = anchorBounds.top + y
+                        return IntOffset(
+                            screenX.coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0)),
+                            screenY.coerceIn(0, (windowSize.height - popupContentSize.height).coerceAtLeast(0)),
+                        )
+                    }
+                }
+            }
             Popup(
-                alignment = Alignment.TopStart,
-                offset = IntOffset(x, y),
+                popupPositionProvider = position,
                 onDismissRequest = { setOpen(false) },
                 properties = PopupProperties(focusable = true),
             ) {
-                MuiMenuSurface(content = content)
+                CompositionLocalProvider(LocalMuiMenuDismiss provides { setOpen(false) }) {
+                    MuiMenuSurface(content = content)
+                }
             }
         }
     }

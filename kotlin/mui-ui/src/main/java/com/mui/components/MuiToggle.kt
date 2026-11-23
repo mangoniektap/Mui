@@ -2,7 +2,7 @@ package com.mui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -20,11 +20,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import com.mui.theme.LocalIsDark
 import com.mui.theme.LocalMuiContentColor
 import com.mui.theme.LocalMuiPalette
 import com.mui.theme.muiElevation
@@ -46,7 +46,7 @@ enum class ToggleSize { Default, Sm, Lg }
  * 输出 = onPressedChange。硬约束：禁 material3；视觉全走令牌。
  *
  * @param pressed 受控 on 态（null = 非受控，走 defaultPressed）
- * @param onPressedChange 状态变化回调（null = 只读展示）
+ * @param onPressedChange 可选的状态变化回调
  * @param modifier 布局修饰
  * @param defaultPressed 初始 on 态（非受控时用）
  * @param variant 外观档位（默认 Default）
@@ -70,13 +70,12 @@ fun MuiToggle(
     content: @Composable RowScope.() -> Unit,
 ) {
     val palette = LocalMuiPalette.current
-    val isDark = LocalIsDark.current
     val hovered by interactionSource.collectIsHoveredAsState()
 
     var inner by remember { mutableStateOf(defaultPressed) }
     val isOn = pressed ?: inner
 
-    val surface = toggleSurface(variant, isOn, hovered, palette, isDark)
+    val surface = toggleSurface(variant, isOn, hovered, palette)
     val shape = RoundedCornerShape(MuiRadius.md)
 
     val sizeModifier = when (size) {
@@ -93,16 +92,18 @@ fun MuiToggle(
 
     Box(
         modifier = modifier
+            .muiFocusRing(interactionSource, shape, invalid)
             .clip(shape)
             .background(surface.background, shape)
             .then(if (surface.showBorder) Modifier.border(1.dp, surface.borderColor, shape) else Modifier)
-            .then(if (variant == ToggleVariant.Outline) Modifier.muiElevation("2xs", shape) else Modifier)
-            .muiFocusRing(interactionSource, shape, invalid)
-            .clickable(
+            .then(if (variant == ToggleVariant.Outline) Modifier.muiElevation("xs", shape) else Modifier)
+            .toggleable(
+                value = isOn,
+                role = Role.Button,
                 interactionSource = interactionSource,
                 indication = null,
-                enabled = !disabled && onPressedChange != null,
-                onClick = { toggle() },
+                enabled = !disabled && (pressed == null || onPressedChange != null),
+                onValueChange = { toggle() },
             )
             .then(sizeModifier)
             .then(if (disabled) Modifier.alpha(0.5f) else Modifier),
@@ -133,12 +134,10 @@ private fun toggleSurface(
     isOn: Boolean,
     hovered: Boolean,
     palette: MuiPalette,
-    isDark: Boolean,
 ): ToggleSurface {
-    fun frac(c: Color, f: Float) = c.copy(alpha = c.alpha * f)
     return when {
         isOn -> ToggleSurface(
-            background = if (isDark) frac(palette.accent, 1f) else palette.accent,
+            background = palette.accent,
             foreground = palette.accentForeground,
             borderColor = if (variant == ToggleVariant.Outline) palette.input else Color.Transparent,
             showBorder = variant == ToggleVariant.Outline,
@@ -151,9 +150,9 @@ private fun toggleSurface(
         else -> when (variant) {
             ToggleVariant.Default -> ToggleSurface(Color.Transparent, palette.foreground, Color.Transparent, false)
             ToggleVariant.Outline -> ToggleSurface(
-                background = if (isDark) frac(palette.input, 0.30f) else Color.Transparent,
+                background = Color.Transparent,
                 foreground = palette.foreground,
-                borderColor = if (isDark) palette.input else palette.border,
+                borderColor = palette.input,
                 showBorder = true,
             )
         }

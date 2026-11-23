@@ -1,9 +1,12 @@
 package com.mui.components
 
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
@@ -23,7 +26,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -51,19 +53,14 @@ import kotlinx.coroutines.delay
 /** 滑出方向（sheet.tsx 的 side） */
 enum class SheetSide { Top, Right, Bottom, Left }
 
-/** 进出场时长（web 开 500ms / 关 300ms，此处统一 300ms） */
-private const val SHEET_ANIM_MS = 300
-
-/** web 遮罩 bg-black/50（web 原文即字面黑 50%，非令牌色） */
-private val sheetScrim = Color(0x80000000)
+private const val SHEET_ENTER_MS = 500
+private const val SHEET_EXIT_MS = 300
 
 /**
- * 侧滑面板：模态 Dialog + 黑 50% 遮罩 + 四向滑入面板（bg-background、无边框、lg 阴影、纵向排布 gap-4），
+ * 侧滑面板：模态 Dialog + 黑 50% 遮罩 + 四向滑入面板（bg-background、内侧描边、lg 阴影、纵向排布 gap-4），
  * 左右向 = 高度撑满、宽 3/4 上限 384dp；上下向 = 宽度撑满、高度随内容。
  * 输入：受控/非受控 open、方向、内容槽；输出：滑出浮层。
- * 硬约束：面板无边框（classical 规则注明 sheet 无 border）；进出场 = 300ms 平移 + 遮罩淡入淡出。
- *
- * TODO: web 的开启 500ms / 关闭 300ms 时长差异未移植（统一 300ms）。
+ * 开启 500ms，关闭 300ms。
  *
  * @param open 受控开关（null = 非受控，走 defaultOpen）
  * @param defaultOpen 初始开关状态（非受控时用）
@@ -96,43 +93,47 @@ fun MuiSheet(
     if (!windowShown) return
 
     val palette = LocalMuiPalette.current
-    val spec = tween<IntOffset>(SHEET_ANIM_MS, easing = FastOutSlowInEasing)
+    val easing = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
+    val enterSpec = tween<IntOffset>(SHEET_ENTER_MS, easing = easing)
+    val exitSpec = tween<IntOffset>(SHEET_EXIT_MS, easing = easing)
     val enter: EnterTransition
     val exit: ExitTransition
     when (side) {
         SheetSide.Right -> {
-            enter = slideInHorizontally(spec) { it }
-            exit = slideOutHorizontally(spec) { it }
+            enter = slideInHorizontally(enterSpec) { it }
+            exit = slideOutHorizontally(exitSpec) { it }
         }
         SheetSide.Left -> {
-            enter = slideInHorizontally(spec) { -it }
-            exit = slideOutHorizontally(spec) { -it }
+            enter = slideInHorizontally(enterSpec) { -it }
+            exit = slideOutHorizontally(exitSpec) { -it }
         }
         SheetSide.Top -> {
-            enter = slideInVertically(spec) { -it }
-            exit = slideOutVertically(spec) { -it }
+            enter = slideInVertically(enterSpec) { -it }
+            exit = slideOutVertically(exitSpec) { -it }
         }
         SheetSide.Bottom -> {
-            enter = slideInVertically(spec) { it }
-            exit = slideOutVertically(spec) { it }
+            enter = slideInVertically(enterSpec) { it }
+            exit = slideOutVertically(exitSpec) { it }
         }
     }
     val alignment = when (side) {
-        SheetSide.Right -> Alignment.CenterEnd
-        SheetSide.Left -> Alignment.CenterStart
+        SheetSide.Right -> AbsoluteAlignment.CenterRight
+        SheetSide.Left -> AbsoluteAlignment.CenterLeft
         SheetSide.Top -> Alignment.TopCenter
         SheetSide.Bottom -> Alignment.BottomCenter
-    }
-    val panelSizing = when (side) {
-        SheetSide.Right, SheetSide.Left -> Modifier.fillMaxHeight().fillMaxWidth(0.75f).widthIn(max = 384.dp)
-        SheetSide.Top, SheetSide.Bottom -> Modifier.fillMaxWidth()
     }
 
     Dialog(
         onDismissRequest = { setOpen(false) },
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
-        Box(modifier = Modifier.fillMaxSize().background(sheetScrim)) {
+        MuiDialogDim(0f)
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            MuiModalScrim(isOpen) { setOpen(false) }
+            val panelSizing = when (side) {
+                SheetSide.Right, SheetSide.Left -> Modifier.fillMaxHeight().width(minOf(maxWidth * 0.75f, 384.dp))
+                SheetSide.Top, SheetSide.Bottom -> Modifier.fillMaxWidth()
+            }
             AnimatedVisibility(
                 visible = isOpen,
                 enter = enter,
@@ -142,7 +143,9 @@ fun MuiSheet(
                 Box(
                     modifier = modifier
                         .background(palette.background)
-                        .muiElevation("lg", RectangleShape),
+                        .muiElevation("lg", RectangleShape)
+                        .muiPanelEdge(MuiPopupSide.valueOf(side.name), palette.border)
+                        .excludeModalScrimTouches(),
                 ) {
                     Column(
                         modifier = Modifier
@@ -164,7 +167,7 @@ fun MuiSheet(
         }
         LaunchedEffect(isOpen) {
             if (!isOpen) {
-                delay(SHEET_ANIM_MS.toLong())
+                delay(SHEET_EXIT_MS.toLong())
                 windowShown = false
             }
         }

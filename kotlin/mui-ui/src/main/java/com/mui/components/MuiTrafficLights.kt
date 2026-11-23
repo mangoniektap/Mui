@@ -160,10 +160,10 @@ fun MuiTrafficLights(
                 Modifier
                     .alpha(if (disabled) 0.5f else 1f)
                     .size(size.diameter)
+                    .muiFocusRing(interactionSource, shape)
                     .clip(shape)
                     .background(item.color, shape)
                     .muiElevation("xs", shape)
-                    .muiFocusRing(interactionSource, shape)
                     .onGloballyPositioned { coords ->
                         val pos = coords.positionInWindow()
                         centers[item.value] = Offset(

@@ -64,6 +64,13 @@ fun Modifier.muiElevation(level: String, shape: Shape): Modifier = composed {
             drawIntoCanvas { canvas ->
                 val paint = Paint()
                 for (spec in specs) {
+                    val spread = spec.spread.toPx()
+                    val width = rect.width + spread * 2
+                    val height = rect.height + spread * 2
+                    if (width <= 0f || height <= 0f) continue
+                    val left = rect.left + spec.dx.toPx() - spread
+                    val top = rect.top + spec.dy.toPx() - spread
+                    val shadowRadius = if (radius > 0f) (radius + spread).coerceIn(0f, minOf(width, height) / 2) else 0f
                     paint.color = spec.color
                     paint.asFrameworkPaint().maskFilter = if (spec.blur > 0.dp) {
                         android.graphics.BlurMaskFilter(
@@ -72,12 +79,12 @@ fun Modifier.muiElevation(level: String, shape: Shape): Modifier = composed {
                         )
                     } else null
                     canvas.nativeCanvas.drawRoundRect(
-                        rect.left + spec.dx.toPx(),
-                        rect.top + spec.dy.toPx(),
-                        rect.right + spec.dx.toPx(),
-                        rect.bottom + spec.dy.toPx(),
-                        radius,
-                        radius,
+                        left,
+                        top,
+                        left + width,
+                        top + height,
+                        shadowRadius,
+                        shadowRadius,
                         paint.asFrameworkPaint(),
                     )
                 }

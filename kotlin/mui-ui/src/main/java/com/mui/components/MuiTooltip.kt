@@ -1,10 +1,12 @@
 package com.mui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -14,11 +16,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
@@ -31,60 +35,91 @@ import kotlinx.coroutines.delay
 enum class TooltipSide { Top, Right, Bottom, Left }
 
 /**
- * 文字提示：悬停触发（延迟默认 700ms 显示、离开即关），气泡 = bg-foreground、text-background、
- * rounded-md、px-3 py-1.5、12sp；锚点 Popup（无箭头）。
- * 输入：提示文本、方位与间距、触发内容槽；输出：气泡浮层。
- * 硬约束：气泡颜色 = foreground/background 反转对（对齐 web bg-foreground text-background）；无 material3 依赖。
+ * 在触发器悬停或聚焦时显示提示，默认立即显示。箭头随浮层翻转。
  *
- * TODO: web 的触摸设备触发未移植（仅悬停；触摸设备上等效按压前态不可用时无提示）。
- *
- * @param text 提示文本
- * @param side 弹出方位（默认 Top）
- * @param offsetDp 气泡与触发区的间距（默认 8dp，对应 web slide-in-from-2）
- * @param delayMillis 悬停到显示的延迟（默认 700ms）
- * @param modifier 触发区布局修饰
- * @param content 触发内容
+ * @param side 浮层朝向（默认 Top）。
+ * @param offsetDp 箭头尖端与触发器之间的间距。
+ * @param delayMillis 悬停显示延迟，键盘聚焦时立即显示。
  */
 @Composable
 fun MuiTooltip(
     text: String,
     modifier: Modifier = Modifier,
     side: TooltipSide = TooltipSide.Top,
-    offsetDp: Dp = 8.dp,
-    delayMillis: Long = 700,
+    offsetDp: Dp = 0.dp,
+    delayMillis: Long = 0,
     content: @Composable () -> Unit,
 ) {
     val hoverSource = remember { MutableInteractionSource() }
     val hovered by hoverSource.collectIsHoveredAsState()
+    var focused by remember { mutableStateOf(false) }
     var shown by remember { mutableStateOf(false) }
-    LaunchedEffect(hovered) {
-        if (hovered) {
-            delay(delayMillis)
+    LaunchedEffect(hovered, focused, delayMillis) {
+        if (focused || hovered) {
+            if (!focused) delay(delayMillis.coerceAtLeast(0))
             shown = true
         } else {
             shown = false
         }
     }
-    Box(modifier = modifier.hoverable(hoverSource)) { content() }
 
-    if (shown) {
-        val density = LocalDensity.current
-        val off = with(density) { offsetDp.roundToPx() }
-        val (alignment, offset) = when (side) {
-            TooltipSide.Top -> Alignment.TopCenter to IntOffset(0, -off)
-            TooltipSide.Bottom -> Alignment.BottomCenter to IntOffset(0, off)
-            TooltipSide.Left -> Alignment.CenterStart to IntOffset(-off, 0)
-            TooltipSide.Right -> Alignment.CenterEnd to IntOffset(off, 0)
+    val preferredSide = MuiPopupSide.valueOf(side.name)
+    var arrow by remember(preferredSide) { mutableStateOf(preferredSide to 0) }
+    val updateArrow: (MuiPopupSide, Int) -> Unit = remember {
+        { placedSide, offset -> arrow = placedSide to offset }
+    }
+    Box(modifier) {
+        Box(Modifier.onFocusChanged { focused = it.hasFocus }.focusGroup().hoverable(hoverSource)) {
+            content()
         }
-        Popup(alignment = alignment, offset = offset) {
-            val palette = LocalMuiPalette.current
-            Box(
-                modifier = Modifier
-                    .background(palette.foreground, RoundedCornerShape(MuiRadius.md))
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-            ) {
-                CompositionLocalProvider(LocalMuiContentColor provides palette.background) {
-                    MuiText(text = text, fontSize = 12.sp, lineHeight = 16.sp)
+        if (shown) {
+            Popup(popupPositionProvider = rememberMuiPopupPosition(preferredSide, offsetDp, onPlaced = updateArrow)) {
+                val palette = LocalMuiPalette.current
+                val (placedSide, arrowOffset) = arrow
+                val arrowHeight = 5.dp
+                val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+                val arrowPadding = when (placedSide) {
+                    MuiPopupSide.Top -> PaddingValues(bottom = arrowHeight)
+                    MuiPopupSide.Right -> if (rtl) PaddingValues(end = arrowHeight) else PaddingValues(start = arrowHeight)
+                    MuiPopupSide.Bottom -> PaddingValues(top = arrowHeight)
+                    MuiPopupSide.Left -> if (rtl) PaddingValues(start = arrowHeight) else PaddingValues(end = arrowHeight)
+                }
+                Box(
+                    Modifier.drawBehind {
+                        val depth = arrowHeight.toPx()
+                        val halfWidth = 5.dp.toPx()
+                        val vertical = placedSide == MuiPopupSide.Top || placedSide == MuiPopupSide.Bottom
+                        val crossSize = if (vertical) size.width else size.height
+                        val inset = halfWidth.coerceAtMost(crossSize / 2)
+                        val center = arrowOffset.toFloat().coerceIn(inset, crossSize - inset)
+                        val pointsOut = placedSide == MuiPopupSide.Top || placedSide == MuiPopupSide.Left
+                        val axisSize = if (vertical) size.height else size.width
+                        val tip = if (pointsOut) axisSize else 0f
+                        val base = if (pointsOut) axisSize - depth else depth
+                        val path = Path().apply {
+                            if (vertical) {
+                                moveTo(center, tip)
+                                lineTo(center - inset, base)
+                                lineTo(center + inset, base)
+                            } else {
+                                moveTo(tip, center)
+                                lineTo(base, center - inset)
+                                lineTo(base, center + inset)
+                            }
+                            close()
+                        }
+                        drawPath(path, palette.foreground)
+                    }.padding(arrowPadding),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .background(palette.foreground, RoundedCornerShape(MuiRadius.md))
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    ) {
+                        CompositionLocalProvider(LocalMuiContentColor provides palette.background) {
+                            MuiText(text = text, fontSize = 12.sp, lineHeight = 16.sp)
+                        }
+                    }
                 }
             }
         }

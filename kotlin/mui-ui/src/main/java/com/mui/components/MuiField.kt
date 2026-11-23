@@ -3,6 +3,7 @@ package com.mui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -20,7 +21,6 @@ import com.mui.theme.LocalMuiPalette
 /**
  * 表单字段的纵向组（field.tsx 的 Field）：标签 + 描述 + 错误 + 控件槽，间距 gap-3 = 12dp。
  * 输入 = 各子部件槽；输出 = 无状态纯布局。硬约束：禁 material3；视觉全走令牌。
- * TODO: web 的 responsive 档（容器查询切换横纵）未移植，只有 vertical / horizontal。
  *
  * @param modifier 布局修饰
  * @param orientation 排布方向（Vertical = 纵列控件占满宽 / Horizontal = 横行居中）
@@ -37,6 +37,26 @@ fun MuiField(
             Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) { content() }
         Orientation.Horizontal ->
             Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) { content() }
+    }
+}
+
+/** 字段排布档位，Responsive 按字段容器宽度切换横纵布局。 */
+enum class MuiFieldOrientation { Vertical, Horizontal, Responsive }
+
+/** 对应 Web Field 的 responsive 档，在 28rem 容器断点切换。 */
+@Composable
+fun MuiField(
+    orientation: MuiFieldOrientation,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    when (orientation) {
+        MuiFieldOrientation.Vertical -> MuiField(modifier, Orientation.Vertical, content)
+        MuiFieldOrientation.Horizontal -> MuiField(modifier, Orientation.Horizontal, content)
+        MuiFieldOrientation.Responsive -> BoxWithConstraints(modifier.fillMaxWidth()) {
+            val layout = if (maxWidth >= 448.dp) Orientation.Horizontal else Orientation.Vertical
+            MuiField(orientation = layout, content = content)
+        }
     }
 }
 

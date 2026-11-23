@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -25,9 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
@@ -38,7 +37,6 @@ import com.mui.token.MuiRadius
 import com.mui.theme.muiElevation
 import com.mui.theme.rememberMuiInteractionSource
 
-// TODO: web 的相邻菜单悬停切换（打开状态下 hover 其它触发器直接换菜单）未移植
 
 /** Menubar 内部共享态：同一时刻只允许一个顶级菜单展开 */
 class MuiMenubarState {
@@ -97,18 +95,21 @@ fun RowScope.MuiMenubarMenu(
     val menubarState = LocalMuiMenubarState.current
     var fallbackOpen by remember { mutableStateOf(false) }
     val open = menubarState?.openMenuLabel == label || fallbackOpen
-    var triggerHeight by remember { mutableIntStateOf(0) }
     val interactionSource = rememberMuiInteractionSource()
     val hovered by interactionSource.collectIsHoveredAsState()
 
     fun setOpen(next: Boolean) {
         if (menubarState != null) {
-            menubarState.openMenuLabel = if (next) label else null
+            if (next) menubarState.openMenuLabel = label
+            else if (menubarState.openMenuLabel == label) menubarState.openMenuLabel = null
         } else {
             fallbackOpen = next
         }
     }
 
+    LaunchedEffect(hovered, enabled) {
+        if (hovered && enabled && menubarState?.openMenuLabel != null) setOpen(true)
+    }
     val shape = RoundedCornerShape(MuiRadius.sm)
     val background = when {
         open -> palette.accent
@@ -117,7 +118,7 @@ fun RowScope.MuiMenubarMenu(
     }
     val contentColor = if (open || hovered) palette.accentForeground else androidx.compose.ui.graphics.Color.Unspecified
 
-    Box(modifier.onSizeChanged { triggerHeight = it.height }) {
+    Box(modifier) {
         Box(
             modifier = Modifier
                 .clip(shape)
@@ -136,12 +137,15 @@ fun RowScope.MuiMenubarMenu(
         }
         if (open) {
             Popup(
-                alignment = Alignment.TopStart,
-                offset = IntOffset(0, triggerHeight + with(androidx.compose.ui.platform.LocalDensity.current) { 8.dp.roundToPx() }),
+                popupPositionProvider = rememberMuiPopupPosition(
+                    MuiPopupSide.Bottom, 8.dp, alignStart = true, alignOffset = (-4).dp,
+                ),
                 onDismissRequest = { setOpen(false) },
                 properties = PopupProperties(focusable = true),
             ) {
-                MuiMenuSurface(content = content)
+                CompositionLocalProvider(LocalMuiMenuDismiss provides { setOpen(false) }) {
+                    MuiMenuSurface(content = content)
+                }
             }
         }
     }

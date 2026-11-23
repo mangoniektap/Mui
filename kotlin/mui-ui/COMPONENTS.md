@@ -30,5 +30,17 @@
 
 ## 玻璃组件硬约束（Switch / Slider / ToggleGroup / Picker）
 - GlassLens 画布比玻璃外扩 LENS_MARGIN，shapes 坐标 = 外扩后的画布左上角
-- backdrop 先 `paintPageBackdrop(页面色)` 再画轨道/底座结构，每帧重画（live = true）
-- 按压一律给 `pressed` 布尔，动画引擎自己跑；小件玻璃传 `lensBand = 0.3f`
+- 开关、滑杆和分段控件默认采用 `LocalMuiPageColor`。需要让玻璃折射图片、渐变或其他 Compose 内容时，用 `com.mui.glass.GlassBackdrop` 包住它们，把页面底层传给 `background`，把可交互的前景传给 `content`。背景和控件放在同一个 Compose 根节点内。
+- 控件的 `backdrop` 在页面图层上绘制轨道或底座。`ink` 录制文字和图标，这一层会折射并保持原尺寸。
+- 普通按压传 `pressed`，由引擎推动外鼓。分段控件需要在快速点击时完整播放一次外鼓，因此通过 `lens` 传入自身的按压进度。小件玻璃传 `lensBand = 0.3f`。
+
+## 顶栏和底栏磨砂
+
+在视口级 `GlassBackdrop` 的 `content` 槽中调用 `MuiBarSurface`。把需要参与模糊的页面内容放进 `background`，把标题、操作按钮等前景放进栏的槽中。`bottom = true` 时栏贴底，宽视口默认给左侧栏留出 240dp。页面没有侧栏时可传 `wideBottomInset = 0.dp`。
+
+```kotlin
+GlassBackdrop(Modifier.fillMaxSize(), background = { PageContent() }) {
+    MuiBarSurface { HeaderActions() }
+    MuiBarSurface(bottom = true, wideBottomInset = 0.dp)
+}
+```

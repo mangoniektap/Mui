@@ -12,6 +12,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.mui.theme.LocalMuiPalette
 
@@ -29,7 +32,7 @@ fun MuiProgress(
     modifier: Modifier = Modifier,
 ) {
     val palette = LocalMuiPalette.current
-    val fraction = ((value ?: 0f) / 100f).coerceIn(0f, 1f)
+    val fraction = ((value?.takeIf { it.isFinite() } ?: 0f) / 100f).coerceIn(0f, 1f)
     val animated by animateFloatAsState(
         targetValue = fraction,
         animationSpec = tween(durationMillis = 150),
@@ -39,6 +42,10 @@ fun MuiProgress(
         modifier = modifier
             .fillMaxWidth()
             .height(8.dp)
+            .semantics {
+                progressBarRangeInfo = if (value == null) ProgressBarRangeInfo.Indeterminate
+                else ProgressBarRangeInfo(fraction, 0f..1f)
+            }
             .clip(trackShape)
             .background(palette.primary.copy(alpha = palette.primary.alpha * 0.20f)),
         contentAlignment = Alignment.CenterStart,
@@ -47,7 +54,7 @@ fun MuiProgress(
             modifier = Modifier
                 .fillMaxWidth(animated)
                 .height(8.dp)
-                .background(palette.primary, trackShape),
+                .background(palette.primary),
         )
     }
 }

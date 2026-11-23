@@ -1,47 +1,61 @@
 package com.mui.components
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupPositionProvider
+import com.mui.icon.MuiIcons
 import com.mui.theme.LocalIsDark
 import com.mui.theme.LocalMuiPalette
 import com.mui.theme.muiElevation
 import com.mui.theme.muiFocusRing
 import com.mui.theme.rememberMuiInteractionSource
 import com.mui.token.MuiRadius
-import kotlin.math.roundToInt
 
 /**
  * 可输入 + 下拉过滤列表（combobox.tsx 简化版）：输入框用 MuiInput 表面（h-9 rounded-md border-input），
@@ -49,10 +63,6 @@ import kotlin.math.roundToInt
  * 条目 = rounded-sm py-1.5 px-2 text-sm，高亮条目 bg-accent，右侧画 ✓；空结果给提示行。
  * 输入 = options / selected / onSelect；输出 = onSelect。
  * 硬约束：禁 material3；视觉全走令牌；数据 List<String> 起步。
- * TODO: web 的多选 chips（ComboboxChips/Chip/ChipsInput）未移植。
- * TODO: web 的 anchor（chips 触发器）未移植，弹层宽度固定跟随输入框。
- * TODO: web 的 ComboboxGroup/Label/Separator/Empty 独立子部件未移植，合并进主组件（空态文本内联）。
- * TODO: web 的弹层进出场动画（fade/zoom/slide）未移植。
  *
  * @param options 候选列表（ List<String> 起步）
  * @param selected 受控选中项（null = 非受控，内部记录）
@@ -74,118 +84,232 @@ fun MuiCombobox(
     emptyText: String = "无结果",
     interactionSource: MutableInteractionSource = rememberMuiInteractionSource(),
 ) {
+    var innerSelected by remember { mutableStateOf<String?>(null) }
+    val selection = selected ?: innerSelected
+    MuiComboboxInput(
+        options = options,
+        selected = setOfNotNull(selection),
+        onToggle = {
+            if (selected == null) innerSelected = it
+            onSelect(it)
+        },
+        modifier = modifier,
+        placeholder = placeholder,
+        enabled = enabled,
+        emptyText = emptyText,
+        interactionSource = interactionSource,
+        multiple = false,
+    )
+}
+
+/** 多选组合框，选中项显示为可移除的 chips，输入框继续过滤候选项。 */
+@Composable
+fun MuiCombobox(
+    options: List<String>,
+    selected: Set<String>,
+    onSelectionChange: (Set<String>) -> Unit,
+    modifier: Modifier = Modifier,
+    placeholder: String? = null,
+    enabled: Boolean = true,
+    emptyText: String = "无结果",
+    interactionSource: MutableInteractionSource = rememberMuiInteractionSource(),
+) {
+    MuiComboboxInput(
+        options = options,
+        selected = selected,
+        onToggle = { option -> onSelectionChange(if (option in selected) selected - option else selected + option) },
+        modifier = modifier,
+        placeholder = placeholder,
+        enabled = enabled,
+        emptyText = emptyText,
+        interactionSource = interactionSource,
+        multiple = true,
+    )
+}
+
+@Composable
+private fun MuiComboboxInput(
+    options: List<String>,
+    selected: Set<String>,
+    onToggle: (String) -> Unit,
+    modifier: Modifier,
+    placeholder: String?,
+    enabled: Boolean,
+    emptyText: String,
+    interactionSource: MutableInteractionSource,
+    multiple: Boolean,
+) {
     val palette = LocalMuiPalette.current
     val isDark = LocalIsDark.current
     val density = LocalDensity.current
     val focused by interactionSource.collectIsFocusedAsState()
     val focusRequester = remember { FocusRequester() }
-    // 锚点（输入框）宽度：弹层与其等宽（web 的 w-(--anchor-width)）
-    var anchorWidthPx by remember { mutableStateOf(0) }
-
-    var query by remember { mutableStateOf(selected ?: "") }
-    var innerSelected by remember { mutableStateOf<String?>(selected) }
-    val effectiveSelected = selected ?: innerSelected
+    val invalid = LocalMuiFormFieldInvalid.current
+    val shape = RoundedCornerShape(MuiRadius.md)
+    var anchorWidth by remember { mutableIntStateOf(0) }
+    var query by remember { mutableStateOf("") }
+    var editing by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(false) }
+    var highlighted by remember(query) { mutableIntStateOf(-1) }
 
-    // 聚焦 = 展开；失焦 = 收起（Popup 不抢焦点，点条目时焦点仍在输入框）
-    LaunchedEffect(focused) {
-        if (focused) expanded = true else expanded = false
+    fun close() {
+        expanded = false
+        editing = false
+        query = ""
+        highlighted = -1
     }
 
+    LaunchedEffect(focused, enabled) {
+        if (focused && enabled) expanded = true else close()
+    }
     val filtered = remember(query, options) {
-        if (query.isEmpty()) options
-        else options.filter { it.contains(query, ignoreCase = true) }
+        options.filter { it.contains(query, ignoreCase = true) }
+    }
+    val listState = rememberLazyListState()
+    LaunchedEffect(highlighted) {
+        if (expanded && highlighted in filtered.indices &&
+            listState.layoutInfo.visibleItemsInfo.none { it.index == highlighted }
+        ) listState.scrollToItem(highlighted)
     }
 
-    Box(modifier = modifier.onSizeChanged { anchorWidthPx = it.width }) {
-        // 输入区：MuiInput 表面（透明底 + border-input + xs 阴影 + 聚焦环）
-        val inputShape = RoundedCornerShape(MuiRadius.md)
-        BasicTextField(
-            value = query,
-            onValueChange = {
-                query = it
-                expanded = true
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 36.dp)
-                .clip(inputShape)
-                .background(
-                    if (isDark) {
-                        palette.input.copy(alpha = palette.input.alpha * 0.30f)
-                    } else {
-                        androidx.compose.ui.graphics.Color.Transparent
-                    },
-                    inputShape,
-                )
-                .border(1.dp, palette.input, inputShape)
-                .muiElevation("2xs", inputShape)
-                .muiFocusRing(interactionSource, inputShape)
-                .focusRequester(focusRequester)
-                .clickable(
-                    interactionSource = interactionSource,
-                    indication = null,
-                    enabled = enabled,
-                    onClick = { focusRequester.requestFocus() },
-                )
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            enabled = enabled,
-            singleLine = true,
-            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, lineHeight = 20.sp, color = palette.foreground),
-            cursorBrush = SolidColor(palette.primary),
-            interactionSource = interactionSource,
-            decorationBox = { inner ->
-                Box(contentAlignment = Alignment.CenterStart) {
-                    if (query.isEmpty() && placeholder != null) {
-                        MuiText(text = placeholder, color = palette.mutedForeground)
-                    }
-                    inner()
-                }
-            },
-        )
+    fun choose(option: String) {
+        onToggle(option)
+        query = ""
+        editing = false
+        if (!multiple) close()
+    }
 
+    Box(modifier.onSizeChanged { anchorWidth = it.width }) {
+        Row(
+            modifier = Modifier.fillMaxWidth().heightIn(min = 36.dp)
+                .alpha(if (enabled) 1f else 0.5f)
+                .muiElevation("xs", shape)
+                .muiFocusRing(interactionSource, shape, invalid)
+                .background(if (isDark) palette.input.copy(alpha = palette.input.alpha * 0.3f) else Color.Transparent, shape)
+                .border(1.dp, if (invalid) palette.destructive else palette.input, shape)
+                .padding(start = 8.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FlowRow(
+                Modifier.weight(1f).padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                itemVerticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (multiple) {
+                    selected.forEach { option ->
+                        Row(
+                            Modifier.background(palette.muted, RoundedCornerShape(MuiRadius.sm)).padding(start = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            MuiText(option, fontSize = 12.sp)
+                            MuiButton(
+                                onClick = { onToggle(option) },
+                                modifier = Modifier.semantics { contentDescription = "移除 " + option },
+                                variant = ButtonVariant.Ghost,
+                                size = ButtonSize.IconXs,
+                                enabled = enabled,
+                            ) {
+                                Image(rememberVectorPainter(MuiIcons.X), null, Modifier.size(12.dp),
+                                    colorFilter = ColorFilter.tint(palette.mutedForeground))
+                            }
+                        }
+                    }
+                }
+                val text = if (editing || multiple) query else selected.firstOrNull().orEmpty()
+                BasicTextField(
+                    value = text,
+                    onValueChange = {
+                        query = it
+                        editing = true
+                        expanded = true
+                    },
+                    modifier = Modifier.defaultMinSize(minWidth = 48.dp).weight(1f)
+                        .focusRequester(focusRequester)
+                        .onPreviewKeyEvent { event ->
+                            if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                            when (event.key) {
+                                Key.DirectionDown -> {
+                                    expanded = true
+                                    highlighted = (highlighted + 1).coerceAtMost(filtered.lastIndex)
+                                }
+                                Key.DirectionUp -> {
+                                    expanded = true
+                                    highlighted = if (highlighted < 0) filtered.lastIndex else (highlighted - 1).coerceAtLeast(0)
+                                }
+                                Key.Enter, Key.NumPadEnter -> {
+                                    val item = filtered.getOrNull(highlighted) ?: return@onPreviewKeyEvent false
+                                    if (!expanded) return@onPreviewKeyEvent false
+                                    choose(item)
+                                }
+                                Key.Escape -> {
+                                    if (!expanded) return@onPreviewKeyEvent false
+                                    close()
+                                }
+                                Key.Backspace -> {
+                                    if (!multiple || query.isNotEmpty()) return@onPreviewKeyEvent false
+                                    val last = selected.lastOrNull() ?: return@onPreviewKeyEvent false
+                                    onToggle(last)
+                                }
+                                else -> return@onPreviewKeyEvent false
+                            }
+                            true
+                        },
+                    enabled = enabled,
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, lineHeight = 20.sp, color = palette.foreground),
+                    cursorBrush = SolidColor(palette.primary),
+                    interactionSource = interactionSource,
+                    decorationBox = { inner ->
+                        Box(contentAlignment = Alignment.CenterStart) {
+                            if (text.isEmpty() && placeholder != null && selected.isEmpty()) {
+                                MuiText(placeholder, color = palette.mutedForeground)
+                            }
+                            inner()
+                        }
+                    },
+                )
+            }
+            MuiButton(
+                onClick = {
+                    if (expanded) close() else {
+                        focusRequester.requestFocus()
+                        expanded = true
+                    }
+                },
+                variant = ButtonVariant.Ghost,
+                size = ButtonSize.IconXs,
+                enabled = enabled,
+            ) {
+                Image(rememberVectorPainter(MuiIcons.ChevronDown), "展开选项", Modifier.size(16.dp),
+                    colorFilter = ColorFilter.tint(palette.mutedForeground))
+            }
+        }
         if (expanded && enabled) {
             Popup(
-                popupPositionProvider = remember(density) { ComboboxPopupPosition(density) },
-                onDismissRequest = { expanded = false },
+                popupPositionProvider = rememberMuiPopupPosition(MuiPopupSide.Bottom, 6.dp, alignStart = true),
+                onDismissRequest = { close() },
             ) {
                 val popupShape = RoundedCornerShape(MuiRadius.md)
-                Column(
-                    modifier = Modifier
-                        .width(with(density) { anchorWidthPx.toDp() })
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.width(with(density) { anchorWidth.toDp() }).heightIn(max = 384.dp)
+                        .muiElevation("md", popupShape)
                         .clip(popupShape)
                         .background(palette.popover, popupShape)
                         .border(1.dp, palette.foreground.copy(alpha = palette.foreground.alpha * 0.10f), popupShape)
-                        .muiElevation("md", popupShape)
                         .padding(4.dp),
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .heightIn(max = 376.dp) // web max-h-96 = 384dp，减去 p-1
-                            .verticalScroll(rememberScrollState()),
-                    ) {
-                        if (filtered.isEmpty()) {
-                            MuiText(
-                                text = emptyText,
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                                fontSize = 14.sp,
-                                lineHeight = 20.sp,
-                                color = palette.mutedForeground,
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            )
-                        } else {
-                            for (option in filtered) {
-                                MuiComboboxItem(
-                                    option = option,
-                                    highlighted = option == effectiveSelected,
-                                    onClick = {
-                                        query = option
-                                        innerSelected = option
-                                        expanded = false
-                                        onSelect(option)
-                                    },
-                                )
-                            }
+                    if (filtered.isEmpty()) {
+                        item {
+                            MuiText(emptyText, Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                fontSize = 14.sp, color = palette.mutedForeground,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                        }
+                    } else {
+                        items(filtered.size) { index ->
+                            val option = filtered[index]
+                            MuiComboboxItem(option, index == highlighted, option in selected) { choose(option) }
                         }
                     }
                 }
@@ -199,13 +323,15 @@ fun MuiCombobox(
  * 右上角固定位置画 ✓（ItemIndicator）。
  *
  * @param option 条目文本
- * @param highlighted 是否高亮（当前选中项）
+ * @param highlighted 是否由键盘导航高亮。
+ * @param selected 是否已选中，控制勾选标记。
  * @param onClick 点击回调
  */
 @Composable
 private fun MuiComboboxItem(
     option: String,
     highlighted: Boolean,
+    selected: Boolean,
     onClick: () -> Unit,
 ) {
     val palette = LocalMuiPalette.current
@@ -228,7 +354,7 @@ private fun MuiComboboxItem(
             lineHeight = 20.sp,
             color = if (highlighted) palette.accentForeground else palette.foreground,
         )
-        if (highlighted) {
+        if (selected) {
             Box(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
@@ -254,25 +380,4 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawComboboxCheck(c
         lineTo(w * 0.88f, h * 0.22f)
     }
     drawPath(path, color, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round))
-}
-
-/** 弹层定位：贴在锚点（输入框）正下方左对齐（web sideOffset 6）；放不下时翻到上方 */
-private class ComboboxPopupPosition(private val density: androidx.compose.ui.unit.Density) : PopupPositionProvider {
-    override fun calculatePosition(
-        anchorBounds: androidx.compose.ui.unit.IntRect,
-        windowSize: androidx.compose.ui.unit.IntSize,
-        layoutDirection: androidx.compose.ui.unit.LayoutDirection,
-        popupContentSize: androidx.compose.ui.unit.IntSize,
-    ): IntOffset {
-        val gap = with(density) { 6.dp.toPx().roundToInt() }
-        val x = if (layoutDirection == androidx.compose.ui.unit.LayoutDirection.Ltr) {
-            anchorBounds.left
-        } else {
-            anchorBounds.right - popupContentSize.width
-        }
-        val below = anchorBounds.bottom + gap
-        val fitsBelow = below + popupContentSize.height <= windowSize.height
-        val y = if (fitsBelow) below else (anchorBounds.top - gap - popupContentSize.height).coerceAtLeast(0)
-        return IntOffset(x, y)
-    }
 }

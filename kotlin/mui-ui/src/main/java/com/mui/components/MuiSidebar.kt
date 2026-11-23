@@ -1,9 +1,11 @@
 package com.mui.components
 
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -28,6 +30,8 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -39,26 +43,35 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mui.theme.LocalMuiContentColor
 import com.mui.theme.LocalMuiPalette
+import com.mui.theme.muiElevation
 import com.mui.theme.rememberMuiInteractionSource
 import com.mui.token.MuiRadius
-
-// TODO: web 的移动端 Sheet 抽屉形态、cookie 持久化、Cmd/Ctrl+B 快捷键未移植。
-// TODO: web 的 SidebarMenuBadge/MenuSkeleton/MenuSub/Tooltip 提示未移植。
-// TODO: web 的 variant（floating/inset）未移植，只做经典 sidebar。
 
 /** 侧栏展开宽度（16rem） */
 private val SidebarWidthExpanded = 256.dp
 
 /** 侧栏收起宽度（图标位） */
-private val SidebarWidthCollapsed = 64.dp
+private val SidebarWidthCollapsed = 48.dp
 
 /** 侧栏贴边（sidebar.tsx 的 side） */
 enum class SidebarSide { Left, Right }
+
+enum class SidebarVariant { Sidebar, Floating, Inset }
+
+enum class SidebarCollapsible { Offcanvas, Icon, None }
 
 /** 菜单钮尺寸档位（sidebar.tsx 的 menu button size） */
 enum class SidebarMenuButtonSize { Default, Sm, Lg }
@@ -66,6 +79,7 @@ enum class SidebarMenuButtonSize { Default, Sm, Lg }
 /** 侧栏状态：展开/收起 + 切换 */
 class MuiSidebarState(open: Boolean = true) {
     var open by mutableStateOf(open)
+    var openMobile by mutableStateOf(false)
 
     /** 切换展开态 */
     fun toggle() {
@@ -76,10 +90,17 @@ class MuiSidebarState(open: Boolean = true) {
 /** 创建并记住侧栏状态 */
 @Composable
 fun rememberMuiSidebarState(open: Boolean = true): MuiSidebarState =
-    remember { MuiSidebarState(open) }
+    rememberSaveable(
+        saver = listSaver(
+            save = { listOf(it.open, it.openMobile) },
+            restore = { values -> MuiSidebarState(values[0]).also { it.openMobile = values[1] } },
+        ),
+    ) { MuiSidebarState(open) }
 
 /** 当前侧栏状态（Provider 外为 null） */
 val LocalMuiSidebarState = staticCompositionLocalOf<MuiSidebarState?> { null }
+private val LocalSidebarMobile = staticCompositionLocalOf { false }
+private val LocalSidebarExpanded = staticCompositionLocalOf { true }
 
 /** 读取侧栏状态（未在 Provider 内时抛错，对齐 web 的 useSidebar） */
 @Composable
@@ -101,8 +122,21 @@ fun MuiSidebarProvider(
     modifier: Modifier = Modifier,
     content: @Composable RowScope.() -> Unit,
 ) {
-    CompositionLocalProvider(LocalMuiSidebarState provides state) {
-        Row(modifier = modifier.fillMaxSize(), content = content)
+    val mobile = LocalConfiguration.current.screenWidthDp < 768
+    CompositionLocalProvider(LocalMuiSidebarState provides state, LocalSidebarMobile provides mobile) {
+        Row(
+            modifier = modifier.fillMaxSize().onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown || event.key != Key.B ||
+                    (!event.isCtrlPressed && !event.isMetaPressed)
+                ) {
+                    false
+                } else {
+                    if (mobile) state.openMobile = !state.openMobile else state.toggle()
+                    true
+                }
+            },
+            content = content,
+        )
     }
 }
 
@@ -121,20 +155,67 @@ fun MuiSidebar(
     side: SidebarSide = SidebarSide.Left,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    MuiSidebar(modifier, side, SidebarVariant.Sidebar, SidebarCollapsible.Offcanvas, content)
+}
+
+/** 支持 Web 的移动端抽屉、桌面图标折叠和 floating/inset 外观。 */
+@Composable
+fun MuiSidebar(
+    modifier: Modifier = Modifier,
+    side: SidebarSide = SidebarSide.Left,
+    variant: SidebarVariant = SidebarVariant.Sidebar,
+    collapsible: SidebarCollapsible,
+    content: @Composable ColumnScope.() -> Unit,
+) {
     val state = rememberSidebarRequired()
+    val mobile = LocalSidebarMobile.current
     val palette = LocalMuiPalette.current
-    val width by animateDpAsState(
-        targetValue = if (state.open) SidebarWidthExpanded else SidebarWidthCollapsed,
-        animationSpec = tween(durationMillis = 200),
-    )
-    Column(
-        modifier = modifier
-            .width(width)
-            .fillMaxSize()
+    if (mobile && collapsible != SidebarCollapsible.None) {
+        MuiSheet(
+            open = state.openMobile,
+            onOpenChange = { state.openMobile = it },
+            modifier = modifier.background(palette.sidebar),
+            side = if (side == SidebarSide.Left) SheetSide.Left else SheetSide.Right,
+            showCloseButton = false,
+        ) {
+            CompositionLocalProvider(
+                LocalSidebarExpanded provides true,
+                LocalMuiContentColor provides palette.sidebarForeground,
+            ) {
+                Column(Modifier.fillMaxSize().background(palette.sidebar), content = content)
+            }
+        }
+        return
+    }
+
+    val expanded = state.open || collapsible == SidebarCollapsible.None
+    val framed = variant != SidebarVariant.Sidebar
+    val targetWidth = when {
+        expanded -> SidebarWidthExpanded
+        collapsible == SidebarCollapsible.Icon -> SidebarWidthCollapsed + if (framed) 16.dp else 0.dp
+        else -> 0.dp
+    }
+    val width by animateDpAsState(targetWidth, tween(200, easing = LinearEasing), label = "sidebarWidth")
+    if (width <= 0.dp) return
+    val shape = RoundedCornerShape(MuiRadius.lg)
+    val outside = if (framed) Modifier.padding(8.dp) else Modifier
+    val surface = when (variant) {
+        SidebarVariant.Floating -> Modifier
+            .muiElevation("sm", shape)
+            .clip(shape)
+            .background(palette.sidebar, shape)
+            .border(1.dp, palette.sidebarBorder, shape)
+        SidebarVariant.Inset -> Modifier.background(palette.sidebar)
+        SidebarVariant.Sidebar -> Modifier
             .background(palette.sidebar)
-            .drawEdgeBorder(side, palette.sidebarBorder),
-        content = content,
-    )
+            .drawEdgeBorder(side, palette.sidebarBorder)
+    }
+    CompositionLocalProvider(
+        LocalSidebarExpanded provides expanded,
+        LocalMuiContentColor provides palette.sidebarForeground,
+    ) {
+        Column(modifier.width(width).fillMaxSize().then(outside).then(surface), content = content)
+    }
 }
 
 /** 贴边侧 1dp 描边（left 侧画右缘 / right 侧画左缘） */
@@ -166,6 +247,7 @@ fun MuiSidebarTrigger(
     onClick: (() -> Unit)? = null,
 ) {
     val state = rememberSidebarRequired()
+    val mobile = LocalSidebarMobile.current
     val palette = LocalMuiPalette.current
     val interactionSource = rememberMuiInteractionSource()
     val hovered by interactionSource.collectIsHoveredAsState()
@@ -182,7 +264,7 @@ fun MuiSidebarTrigger(
                 indication = null,
             ) {
                 onClick?.invoke()
-                state.toggle()
+                if (mobile) state.openMobile = !state.openMobile else state.toggle()
             },
         contentAlignment = Alignment.Center,
     ) {
@@ -412,4 +494,40 @@ fun MuiSidebarMenuButton(
             content()
         }
     }
+}
+
+
+/** 菜单末尾的计数或状态提示。 */
+@Composable
+fun MuiSidebarMenuBadge(text: String, modifier: Modifier = Modifier) {
+    if (LocalSidebarExpanded.current) {
+        MuiText(text, modifier = modifier.padding(horizontal = 4.dp), fontSize = 12.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+/** 侧栏加载占位，图标和文字可按当前折叠状态显示。 */
+@Composable
+fun MuiSidebarMenuSkeleton(modifier: Modifier = Modifier, showIcon: Boolean = false) {
+    Row(
+        modifier.height(32.dp).padding(horizontal = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (showIcon) MuiSkeleton(Modifier.size(16.dp))
+        if (LocalSidebarExpanded.current) MuiSkeleton(Modifier.width(88.dp).height(16.dp))
+    }
+}
+
+/** 子菜单在展开态显示，并用内缩竖线标记层级。 */
+@Composable
+fun MuiSidebarMenuSub(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    if (!LocalSidebarExpanded.current) return
+    val palette = LocalMuiPalette.current
+    Column(
+        modifier.fillMaxWidth().padding(start = 14.dp)
+            .drawEdgeBorder(SidebarSide.Right, palette.sidebarBorder)
+            .padding(start = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        content = content,
+    )
 }

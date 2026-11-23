@@ -5,6 +5,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,9 +32,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
@@ -43,9 +43,9 @@ import com.mui.token.MuiRadius
 import com.mui.theme.muiElevation
 import com.mui.theme.muiFocusRing
 import com.mui.theme.rememberMuiInteractionSource
+import kotlinx.coroutines.delay
 
 // TODO: web 的 viewport 共享面板（多个 trigger 共用一个视口动画）未移植，这里每个 trigger 独立 Popup
-// TODO: web 的悬停移出自动收起未移植（点外部 / 再点触发器关闭）
 
 /**
  * 导航菜单：横向一排顶级触发器（h-9 rounded-md px-4 text-sm font-medium），
@@ -85,11 +85,12 @@ fun MuiNavigationMenuTrigger(
     enabled: Boolean = true,
 ) {
     val palette = LocalMuiPalette.current
-    val density = androidx.compose.ui.platform.LocalDensity.current
     val interactionSource = rememberMuiInteractionSource()
     val hovered by interactionSource.collectIsHoveredAsState()
     var open by remember { mutableStateOf(false) }
-    var triggerHeight by remember { mutableStateOf(0) }
+    var openedByHover by remember { mutableStateOf(false) }
+    val panelSource = rememberMuiInteractionSource()
+    val hoveringPanel by panelSource.collectIsHoveredAsState()
     val shape = RoundedCornerShape(MuiRadius.md)
 
     val chevronRotation by animateFloatAsState(
@@ -97,8 +98,19 @@ fun MuiNavigationMenuTrigger(
         animationSpec = tween(durationMillis = 300),
     )
 
-    androidx.compose.runtime.LaunchedEffect(hovered) {
-        if (hovered) open = true
+    LaunchedEffect(hovered, hoveringPanel, enabled) {
+        if (!enabled) {
+            open = false
+            openedByHover = false
+        } else if (hovered && !open) {
+            delay(200)
+            openedByHover = true
+            open = true
+        } else if (!hovered && !hoveringPanel && openedByHover) {
+            delay(150)
+            open = false
+            openedByHover = false
+        }
     }
 
     val background = when {
@@ -108,18 +120,21 @@ fun MuiNavigationMenuTrigger(
     }
     val contentColor = if (open || hovered) palette.accentForeground else Color.Unspecified
 
-    Box(modifier.onSizeChanged { triggerHeight = it.height }) {
+    Box(modifier) {
         Row(
             modifier = Modifier
                 .height(36.dp)
+                .muiFocusRing(interactionSource, shape)
                 .clip(shape)
                 .background(background, shape)
-                .muiFocusRing(interactionSource, shape)
                 .clickable(
                     interactionSource = interactionSource,
                     indication = null,
                     enabled = enabled,
-                ) { open = !open }
+                ) {
+                    open = !open
+                    openedByHover = false
+                }
                 .alpha(if (enabled) 1f else 0.5f)
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -142,12 +157,14 @@ fun MuiNavigationMenuTrigger(
         }
         if (open) {
             Popup(
-                alignment = Alignment.TopStart,
-                offset = IntOffset(0, triggerHeight + with(density) { 6.dp.roundToPx() }),
-                onDismissRequest = { open = false },
+                popupPositionProvider = rememberMuiPopupPosition(MuiPopupSide.Bottom, 6.dp, alignStart = true),
+                onDismissRequest = {
+                    open = false
+                    openedByHover = false
+                },
                 properties = PopupProperties(focusable = true),
             ) {
-                MuiNavigationMenuPanel(content = panel)
+                MuiNavigationMenuPanel(modifier = Modifier.hoverable(panelSource), content = panel)
             }
         }
     }

@@ -1,3 +1,4 @@
+/** @file Kotlin 液态玻璃的 AGSL 着色器与共享几何类型。 */
 package com.mui.glass
 
 import android.graphics.RuntimeShader
@@ -67,7 +68,6 @@ const val GLASS_SHAPE_MAX = 3
 object GlassShaderSource {
     val agsl: String = """
 uniform shader uTex;
-uniform shader uInk;
 uniform float uHasInk;
 uniform float2 uRes;
 
@@ -85,13 +85,13 @@ uniform float uSpan;
 uniform float uDecay;
 uniform float uBody;
 uniform float uGray;
-uniform float3 uGrayColor;
-uniform float3 uBodyColor;
+layout(color) uniform float4 uGrayColor;
+layout(color) uniform float4 uBodyColor;
 uniform float uBodyShade;
 uniform float uBodyPeak;
 uniform float uBodyFadeX;
-uniform float3 uRimLight;
-uniform float3 uRimDark;
+layout(color) uniform float4 uRimLight;
+layout(color) uniform float4 uRimDark;
 uniform float uRimTop;
 uniform float uRimBottom;
 uniform float uRimSide;
@@ -119,24 +119,25 @@ float2 sdfNormal(float2 p, float2 h, float r) {
     return normalize(float2(gx, gy) + float2(1e-5));
 }
 
-half4 main(float2 fragCoord) {
-    float2 p = float2(fragCoord.x, fragCoord.y);
-    /* ⚠️ uTex.eval() 收的是**像素坐标**，不是 0..1 的 uv。
-       web 版是 texture2D(sampler, uv)，GLSL 的 sampler 才吃归一化 uv；
-       AGSL 的输入 shader 用自己的像素坐标系 —— 传 uv 进来等于整屏只采左上角一个像素
-       （折射/色散都会变成"什么都没有"，因为整张图是单色）。 */
-    half4 texel = uTex.eval(p);
-    float3 col = float3(texel.r, texel.g, texel.b);
+// 图层上下分别录制背面和文字。夹到各自边缘的像素中心，保持与 Web 纹理夹取一致。
+half4 sampleLayer(float2 p, float originY) {
+    return uTex.eval(clamp(p, float2(0.5), uRes - 0.5) + float2(0.0, originY));
+}
+
+half4 main(float2 p) {
+    if (p.x < 0.0 || p.y < 0.0 || p.x >= uRes.x || p.y >= uRes.y) return half4(0.0);
+    float4 col = sampleLayer(p, 0.0);
 
     float a = 0.0;
     float shadowAcc = 0.0;
-    float sigma = max(uShadowBlur, 0.001) * 0.5;
+    float sigma = max(uShadowBlur, 0.001);
 
     for (int i = 0; i < 3; i++) {
         float bw = uHalf[i].x + uBulge[i];
         float bh = uHalf[i].y + uBulge[i];
         float2 v = p - uCenter[i];
         float2 vv = v;
+        float2 motionScale = float2(1.0);
         if (uMotionAmp > 0.0005) {
             // 保体积应变 s·t=1；s 由这块玻璃在画布里的真实余量封顶。
             // 画布外扩只按按压外鼓预算，uBulge 已吃掉大半，惯性再放大就会被切平。
@@ -149,21 +150,24 @@ half4 main(float2 fragCoord) {
             float halfGrow = dot(growAxis, hv);
             float roomGrow = dot(growAxis, room);
             float s = min(sWant, 1.0 + roomGrow / max(halfGrow, 0.001));
-            vv = v * mix(float2(sWant), float2(1.0 / s), growAxis);
+            motionScale = mix(float2(sWant), float2(1.0 / s), growAxis);
+            vv = v * motionScale;
         }
         float br = uRadius[i] + uBulge[i];
         float sd = sdRoundRect(vv, float2(bw, bh), br);
 
-        // 影子：与玻璃同形（含外鼓 / 应变），高斯衰减近似 drop-shadow，画在轮廓外
-        float sdShadow = sdRoundRect(vv - uShadowOffset, float2(bw, bh), br);
-        float dOut = max(sdShadow, 0.0);
-        shadowAcc = max(shadowAcc, uShadowColor.a * 0.5 * exp(-0.5 * (dOut / sigma) * (dOut / sigma)));
+        // 以 SDF 近似模糊轮廓遮罩。偏移用屏幕坐标，拖动形变时阴影偏移仍保持同一距离。
+        if (uShadowColor.a > 0.0) {
+            float sdShadow = sdRoundRect((v - uShadowOffset) * motionScale, float2(bw, bh), br);
+            float blurCoverage = 1.0 / (1.0 + exp(clamp(1.7 * sdShadow / sigma, -16.0, 16.0)));
+            shadowAcc = max(shadowAcc, uShadowColor.a * blurCoverage);
+        }
 
         float cov = 1.0 - smoothstep(-0.6 * uDpr, 0.6 * uDpr, sd);
         if (cov > 0.0) {
             float depth = max(-sd, 0.0);
             float mn = max(min(bw, bh), 0.001);
-            float bevel = mn * uBendBand;
+            float bevel = max(mn * uBendBand, 0.001);
             // 只有透明档是玻璃；玉白 / 平灰是磨砂，整套光学都不参与
             float opt = 1.0 - max(uBody, uGray);
             float2 n = sdfNormal(vv, float2(bw, bh), br);
@@ -198,10 +202,11 @@ half4 main(float2 fragCoord) {
             float overQ = max(sdRoundRect(q, hv, br), 0.0);
             tapR -= n * max(max(sdRoundRect(tapR, hv, br), 0.0) - overQ, 0.0) * w;
             tapB -= n * max(max(sdRoundRect(tapB, hv, br), 0.0) - overQ, 0.0) * w;
-            float3 sc;
-            sc.r = uTex.eval(uCenter[i] + tapR).r;
-            sc.g = uTex.eval(uCenter[i] + q).g;
-            sc.b = uTex.eval(uCenter[i] + tapB).b;
+            half4 trackR = sampleLayer(uCenter[i] + tapR, 0.0);
+            half4 trackG = sampleLayer(uCenter[i] + q, 0.0);
+            half4 trackB = sampleLayer(uCenter[i] + tapB, 0.0);
+            float3 sc = float3(trackR.r, trackG.g, trackB.b);
+            float3 opacity = float3(trackR.a, trackG.a, trackB.a);
             // 内容层只走凸透镜位移，不除 mc：文字 / 图标折射但不缩小。
             // 色散两层都要做：彩边主要来自文字这种高对比边缘，只给背景层分通道会看不见
             if (uHasInk > 0.5) {
@@ -213,12 +218,13 @@ half4 main(float2 fragCoord) {
                 inkB -= n * max(max(sdRoundRect(inkB, hv, br), 0.0) - overInk, 0.0) * w;
                 // 三通道各自合成：R/B 用自己错位位置的 ink 覆盖度。
                 // 共用中心 alpha 会把错位造成的覆盖差异统一裁掉，色散就没了
-                half4 inkR4 = uInk.eval(uCenter[i] + inkR);
-                half4 inkG4 = uInk.eval(uCenter[i] + qInk);
-                half4 inkB4 = uInk.eval(uCenter[i] + inkB);
-                sc.r = mix(sc.r, inkR4.r, inkR4.a);
-                sc.g = mix(sc.g, inkG4.g, inkG4.a);
-                sc.b = mix(sc.b, inkB4.b, inkB4.a);
+                half4 inkR4 = sampleLayer(uCenter[i] + inkR, uRes.y);
+                half4 inkG4 = sampleLayer(uCenter[i] + qInk, uRes.y);
+                half4 inkB4 = sampleLayer(uCenter[i] + inkB, uRes.y);
+                float3 inkOpacity = float3(inkR4.a, inkG4.a, inkB4.a);
+                // AGSL 样本是预乘颜色。直接做 over，避免文字的半透明边缘再乘一次 alpha。
+                sc = sc * (1.0 - inkOpacity) + float3(inkR4.r, inkG4.g, inkB4.b);
+                opacity = mix(opacity, float3(1.0), inkOpacity);
             }
 
             float vt = clamp((vv.y + bh) / max(2.0 * bh, 0.001), 0.0, 1.0);
@@ -231,33 +237,39 @@ half4 main(float2 fragCoord) {
             float sideIn = clamp(1.0 - depth / max(bevel, 0.001), 0.0, 1.0);
             sideIn = sideIn * sideIn;
             thick = thick * (1.0 - uBodyFadeX * sideIn * abs(n.x));
-            sc = mix(sc, uBodyColor, uBodyShade * thick * opt);
+            float tint = uBodyShade * thick * opt;
+            sc = mix(sc, uBodyColor.rgb, tint);
+            opacity = mix(opacity, float3(1.0), tint);
 
             float rim = 1.0 - smoothstep(0.0, max(uRimWidth, 0.5) * uDpr, depth);
             rim = rim * rim;
             float nUp = max(-n.y, 0.0);
             float nDn = max(n.y, 0.0);
             float nSide = abs(n.x);
-            sc = mix(sc, uRimLight, clamp(rim * nUp * uRimTop * opt, 0.0, 1.0));
-            sc = mix(sc, uRimLight, clamp(rim * nDn * uRimBottom * opt, 0.0, 1.0));
-            sc = mix(sc, uRimDark, clamp(rim * nSide * uRimSide * opt, 0.0, 1.0));
+            float topLight = clamp(rim * nUp * uRimTop * opt, 0.0, 1.0);
+            float bottomLight = clamp(rim * nDn * uRimBottom * opt, 0.0, 1.0);
+            float sideShade = clamp(rim * nSide * uRimSide * opt, 0.0, 1.0);
+            sc = mix(sc, uRimLight.rgb, topLight);
+            sc = mix(sc, uRimLight.rgb, bottomLight);
+            sc = mix(sc, uRimDark.rgb, sideShade);
 
             sc = mix(sc, float3(1.0), uBody);
-            sc = mix(sc, uGrayColor, uGray);
+            sc = mix(sc, uGrayColor.rgb, uGray);
+            opacity = 1.0 - (1.0 - opacity) * (1.0 - topLight) * (1.0 - bottomLight) * (1.0 - sideShade)
+                * (1.0 - uBody) * (1.0 - uGray);
 
-            col = mix(col, sc, cov);
+            col = mix(col, float4(sc, max(opacity.r, max(opacity.g, opacity.b))), cov);
             a = max(a, cov);
         }
     }
 
     if (uFill > 0.5) {
-        return half4(float4(col, 1.0));
+        return half4(col);
     }
     // 影子垫底、玻璃盖上面（over 合成，premultiplied）
-    float glassA = a * uAlpha;
-    float outA = glassA + shadowAcc * (1.0 - glassA);
-    float3 outRGB = col * glassA + (uShadowColor.rgb * shadowAcc) * (1.0 - glassA);
-    return half4(float4(outRGB, outA));
+    float4 glass = col * (a * uAlpha);
+    float4 shadow = float4(uShadowColor.rgb * shadowAcc, shadowAcc);
+    return half4(glass + shadow * (1.0 - glass.a));
 }
 """.trimIndent()
 

@@ -1,6 +1,7 @@
 package com.mui.components
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -24,11 +25,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,15 +44,13 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
-import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.VectorPainter
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
@@ -63,19 +64,21 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mui.glass.EaseOutQuad
 import com.mui.glass.GlassBody
 import com.mui.glass.GlassLens
 import com.mui.glass.GlassShadowLevel
+import com.mui.glass.GlassTokens
 import com.mui.glass.LensShape
 import com.mui.glass.glassCanvasPx
-import com.mui.glass.paintPageBackdrop
-import com.mui.theme.LocalMuiPageColor
+import com.mui.glass.glassPageColor
 import com.mui.theme.LocalMuiPalette
 import com.mui.theme.muiElevation
 import com.mui.theme.muiFocusRing
 import com.mui.theme.rememberMuiInteractionSource
 import com.mui.token.MuiRadius
 import com.mui.token.MuiTypography
+import kotlinx.coroutines.flow.first
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.roundToInt
@@ -129,7 +132,7 @@ private val SEG_STACK_TEXT_H = 11.dp
 private val SEG_STACK_H = SEG_STACK_PAD_V * 2 + SEG_ICON + SEG_STACK_GAP + SEG_STACK_TEXT_H
 
 /** web: `TopGroup.Root` 的 `p-0.5` */
-private val ROOT_PAD = 2.dp
+private val ROOT_PAD = 3.dp
 
 /** web: `const GLIDE = "translate 280ms cubic-bezier(0.32, 0.72, 0, 1)"` */
 private const val GLIDE_MS = 280
@@ -265,7 +268,7 @@ private fun SegmentedToggleGroup(
     disabled: Boolean,
 ) {
     val palette = LocalMuiPalette.current
-    val pageColor = LocalMuiPageColor.current
+    val pageColor = glassPageColor()
     val density = LocalDensity.current
     val textMeasurer = rememberTextMeasurer()
     val metrics = metricsOf(size)
@@ -288,16 +291,7 @@ private fun SegmentedToggleGroup(
     var drag by remember { mutableStateOf<DragState?>(null) }
     /** web: `const [pending, setPending] = useState<number|null>(null)` —— 松手吸附到哪一段 */
     var pending by remember { mutableStateOf<Int?>(null) }
-    /**
-     * 段盒子测量基准（根容器 border box 在窗口里的原点）。
-     *
-     * ⚠️ 这里必须把它**在组合里读一次**（下面的 [origin]）。原因：子节点的
-     * `onGloballyPositioned` 先于根节点回调，首帧基准还是 (0,0)，量到的是窗口绝对坐标；
-     * 根节点随后写进正确原点时，若没有任何组合读取它，就不会重组 → 也不会重排 →
-     * 子节点不会再量一次，那份错基准的几何就固化下来，玻璃被摆到容器外（整块消失）。
-     * 读一次让它触发重组，重排时子节点自然重量、收敛到正确值。
-     */
-    var rootOrigin by remember { mutableStateOf(Offset.Zero) }
+    var rootOrigin by remember { mutableStateOf<Offset?>(null) }
     val origin = rootOrigin
     var rootSize by remember { mutableStateOf(IntSize.Zero) }
 
@@ -306,11 +300,10 @@ private fun SegmentedToggleGroup(
      * 两者都是「逻辑选中」，只用来决定玻璃该停在哪一段，**不用来染色**（见 coveredIndex）。
      */
     val active = items.indexOfFirst { it.value == current }
-    fun segsOf(g: List<SegGeom>): List<SegBox> = g.mapIndexed { i, s ->
-        SegBox(s.box.left, s.box.top, s.box.width, s.box.height, i == active)
+    // 各节点先记录同一坐标系的实测位置，等到绘制时才换算到控件原点。
+    val segs = if (origin == null) emptyList() else geom.take(items.size).mapIndexed { i, segment ->
+        SegBox(segment.box.left - origin.x, segment.box.top - origin.y, segment.box.width, segment.box.height, i == active)
     }
-    /** web 每次 read() 都按当前 DOM 重建整份盒子；条目变少时旧盒要丢掉，所以按条数截断 */
-    val segs = segsOf(geom).take(items.size)
 
     /** web: `const count = items ? items.length : ...` —— 条数变了要重量 */
     val count = items.size
@@ -328,8 +321,8 @@ private fun SegmentedToggleGroup(
         geom = next
     }
 
-    fun rel(coords: androidx.compose.ui.layout.LayoutCoordinates): Rect =
-        coords.boundsInRoot().translate(-origin)
+    fun bounds(coords: androidx.compose.ui.layout.LayoutCoordinates) =
+        Rect(coords.localToRoot(Offset.Zero), Size(coords.size.width.toFloat(), coords.size.height.toFloat()))
 
     // web: `setPending((p) => (p !== null && next[p]?.on ? null : p))`
     // —— 松手提交生效（落点那段变 on）后收掉 pending，之后位置全交给选中值。
@@ -349,23 +342,27 @@ private fun SegmentedToggleGroup(
     /** 玻璃的渲染位置：拖动中跟手，其余时刻读滑行动画的实时值（≈ CSS transition 的计算值） */
     var glassX by remember { mutableFloatStateOf(0f) }
     var placed by remember { mutableStateOf(false) }
-    val dragLeft = drag?.let { clampX(it.baseX + it.dx) }
-    val glassLeft = dragLeft ?: glassX
+    val dragLeft = drag?.takeIf { it.moved }?.let { clampX(it.baseX + it.dx) }
+    val glassLeft = dragLeft ?: if (placed) glassX else box?.x ?: 0f
 
-    /**
-     * 染色判据 —— web 的 `coveredIndex`：
-     * ```
-     * segs.findIndex(s => Math.abs(s.x - glassLeft) < 1 && Math.abs(s.w - box.w) < 1)
-     * ```
-     * 关键点：web 的 `glassLeft` 是**状态值**（`box.x`），中间的滑行由 CSS 自己跑，
-     * 所以这个判据在无拖动时恒等于「玻璃要停的那一段」。这里照抄同一个量（box.x），
-     * 不能读动画实时值 —— 否则 280ms 里判据几乎不成立（不染色）、落定时在阈值附近横跳（屏闪）。
-     */
-    val coveredIndex = if (drag != null) {
-        val w = box?.w ?: 0f
-        segs.indexOfFirst { abs(it.x - glassLeft) < 1f && abs(it.w - w) < 1f }
-    } else {
-        pending ?: active
+    // 依据当前帧的玻璃边界着色。滑到一半时，由透镜里的 ink 负责绘制被覆盖的部分。
+    val tolerance = density.density
+    val coveredIndex = if (box == null) -1 else segs.indexOfFirst {
+        abs(it.x - glassLeft) < tolerance && abs(it.y - box.y) < tolerance &&
+            abs(it.w - box.w) < tolerance && abs(it.h - box.h) < tolerance
+    }
+
+    val pressProgress = remember { Animatable(0f) }
+    var pressSequence by remember { mutableIntStateOf(0) }
+    var pressed by remember { mutableStateOf(false) }
+    LaunchedEffect(pressSequence) {
+        if (pressSequence == 0) return@LaunchedEffect
+        val animation = tween<Float>(GlassTokens.pressDurationMs.roundToInt(), easing = EaseOutQuad)
+        pressProgress.animateTo(1f, animation)
+        // 快速点击也完整播放一次外鼓，按住不放时停在峰值。
+        snapshotFlow { drag == null }.first { it }
+        pressed = false
+        pressProgress.animateTo(0f, animation)
     }
 
     /** web: `const lensMargin = box ? Math.ceil(box.h * LENS_MARGIN_RATIO) : 0` */
@@ -411,37 +408,17 @@ private fun SegmentedToggleGroup(
     Box(
         modifier = modifier
             .onGloballyPositioned {
-                rootOrigin = it.boundsInRoot().topLeft
+                rootOrigin = it.localToRoot(Offset.Zero)
                 rootSize = it.size
             }
             .alpha(if (disabled) 0.5f else 1f)
             // web: `relative inline-flex w-fit touch-none items-center rounded-full
             //       border border-input bg-card p-0.5 shadow-sm select-none`
             // 不裁切：玻璃画布要外扩到根容器之外（web 无 overflow:hidden）。
-            .background(palette.card, baseShape)
-            /* ⚠️ 底座描边**不能用 `Modifier.border`**。
-               Compose 的 border 是 `onDrawWithContent { drawContent(); drawOutline(...) }` ——
-               先画内容、再把描边盖上去，也就是描边永远压在**子节点之上**，而玻璃正是子节点。
-               于是玻璃鼓起压住轨道时，那条真实描边照样画在玻璃上面：玻璃里一条折射过的轨道，
-               上面又压一条没折射的原轨道，永远两条。
-               web 没有这个问题：CSS 的 border 在 DOM 里，层级低于 z-20 的 canvas，玻璃一盖就没。
-               所以这里改成 drawBehind 画同一圈描边 —— 落在内容**之下**，玻璃能正常盖住 / 折它。 */
-            .drawBehind {
-                val sw = 1.dp.toPx()
-                // ⚠️ 这个 lambda 里的 `size` 会被外层参数 `size: ToggleGroupSize` 遮住，
-                //    必须显式写 this.size（DrawScope 的绘制尺寸）。
-                val w = this.size.width
-                val h = this.size.height
-                val r = (h - sw) / 2f
-                drawRoundRect(
-                    color = palette.input,
-                    topLeft = Offset(sw / 2f, sw / 2f),
-                    size = Size(w - sw, h - sw),
-                    cornerRadius = CornerRadius(r, r),
-                    style = Stroke(sw),
-                )
-            }
             .muiElevation("sm", baseShape)
+            .drawBehind {
+                drawSegmentedTrack(Offset.Zero, this.size, palette.card, palette.input)
+            }
             .pointerInput(items.size, count, disabled, geom.size, size) {
                 if (disabled || geom.isEmpty()) return@pointerInput
                 awaitEachGesture {
@@ -466,6 +443,8 @@ private fun SegmentedToggleGroup(
                     // web: 拖动基准就用"按下的那一段"，与刚提交的选中段同源。
                     var d = DragState(x0 = down.position.x, baseX = seg.x, w = seg.w, dx = 0f, moved = false)
                     drag = d
+                    pressed = true
+                    pressSequence++
                     try {
                         while (true) {
                             val event = awaitPointerEvent()
@@ -537,7 +516,8 @@ private fun SegmentedToggleGroup(
                 )
                 Box(
                     Modifier
-                        .onGloballyPositioned { c -> put(i) { g -> g.copy(box = rel(c)) } }
+                        .onGloballyPositioned { c -> put(i) { g -> g.copy(box = bounds(c)) } }
+                        .muiFocusRing(segInteraction, CircleShape)
                         .clip(CircleShape)
                         // web: SEG_TEXT / SEG_STACK 决定段盒尺寸（图标段自身内容高可能超过档位高）
                         .height(if (item.icon != null) maxOf(SEG_STACK_H, metrics.height) else metrics.height)
@@ -554,7 +534,6 @@ private fun SegmentedToggleGroup(
                                 commit(item.value)
                             }
                         }
-                        .muiFocusRing(segInteraction, CircleShape)
                         .padding(horizontal = metrics.padH),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -568,20 +547,20 @@ private fun SegmentedToggleGroup(
                                 contentDescription = null,
                                 modifier = Modifier
                                     .size(SEG_ICON)
-                                    .onGloballyPositioned { c -> put(i) { it.copy(icon = rel(c)) } },
+                                    .onGloballyPositioned { c -> put(i) { it.copy(icon = bounds(c)) } },
                                 colorFilter = ColorFilter.tint(segColor),
                             )
                             SegLabel(
                                 text = item.label,
                                 style = labelStyle,
-                                modifier = Modifier.onGloballyPositioned { c -> put(i) { it.copy(label = rel(c)) } },
+                                modifier = Modifier.onGloballyPositioned { c -> put(i) { it.copy(label = bounds(c)) } },
                             )
                         }
                     } else {
                         SegLabel(
                             text = item.label,
                             style = labelStyle,
-                            modifier = Modifier.onGloballyPositioned { c -> put(i) { it.copy(label = rel(c)) } },
+                            modifier = Modifier.onGloballyPositioned { c -> put(i) { it.copy(label = bounds(c)) } },
                         )
                     }
                 }
@@ -590,7 +569,7 @@ private fun SegmentedToggleGroup(
 
         // ── 玻璃滑块（web: z-20 的 span + GlassLens）─────────────────
         val placedBox = box
-        if (placedBox != null && placedBox.w > 0f && placedBox.h > 0f) {
+        if (origin != null && placedBox != null && placedBox.w > 0f && placedBox.h > 0f) {
             val d = density.density
             val wPx = placedBox.w
             val hPx = placedBox.h
@@ -599,7 +578,7 @@ private fun SegmentedToggleGroup(
             // 球心 / 背面全部按"浮点值 − 这个整数原点"反推，取整丢掉的小数因此不会累积。
             val originX = (glassLeft - marginPx).roundToInt()
             val originY = (placedBox.y - marginPx).roundToInt()
-            // offset 相对 content 原点（padding 2dp），两边都是整数像素
+            // 用实测画布原点减去实际内边距，得到相对内容区的偏移。
             val padPx = with(density) { ROOT_PAD.roundToPx() }
             val painters: List<VectorPainter?> = items.map { item ->
                 key(item.value) { item.icon?.let { rememberVectorPainter(it) } }
@@ -616,7 +595,6 @@ private fun SegmentedToggleGroup(
                     )
                 )
             }
-            val resolvedPage = if (pageColor != Color.Unspecified) pageColor else palette.background
 
             /** web: `shapes={[{ cx: m + box.w/2, cy: m + box.h/2, hw, hh, radius: box.h/2, swell: 1 }]}` */
             val shapes = listOf(
@@ -631,6 +609,7 @@ private fun SegmentedToggleGroup(
             )
 
             GlassLens(
+                pageColor = pageColor,
                 modifier = Modifier
                     .offset { IntOffset(originX - padPx, originY - padPx) }
                     .glassCanvasPx(
@@ -642,57 +621,21 @@ private fun SegmentedToggleGroup(
                 live = true,
                 motion = 3,
                 // web: `body={pressed ? "transparent" : "gray"}` `shadow={pressed ? "sm" : "none"}`
-                body = if (drag != null) GlassBody.TRANSPARENT else GlassBody.GRAY,
-                pressed = drag != null,
+                body = if (pressed) GlassBody.TRANSPARENT else GlassBody.GRAY,
+                lens = pressProgress.value,
                 // web: `[--glass-lens-compress:0.10] [--glass-lens-decay:0.7]`
                 lensCompress = 0.10f,
                 lensDecay = 0.7f,
-                shadow = if (drag != null) GlassShadowLevel.SM else GlassShadowLevel.NONE,
+                shadow = if (pressed) GlassShadowLevel.SM else GlassShadowLevel.NONE,
                 shapes = shapes,
-                    // ── web: paintTrack（背面：页面 + 底座 + 描边）──────────
-                    // ⚠️ 只画「面」和「边」，**不画投影**（web 那段里的 setShadowLayer 不要抄）。
-                    //   投影是底座的属性，它挂在**真实图层**上（根节点的 muiElevation），
-                    //   不属于玻璃要折射的那一层。塞进纹理会多出一条边，而且这条边
-                    //   永远"不跟着动"：
-                    //     · 轨道是 1dp 的锐线 —— 被 10% 压缩后，位置一眼能看出挪了；
-                    //     · 投影是 4dp 的软带 —— 同样的位移落在一条软边上，峰值位置看不出来。
-                    //   于是玻璃里就成了「轨道缩小了 + 投影那条边还在原地」两条边。
-                    //   玻璃靠边缘的斜面本来就会把轮廓外的像素（正是投影带所在的位置）折进来，
-                    //   所以这条"没动"的边一定看得见 —— 它不是折射算错，是这层根本不该进来。
-                    backdrop = {
-                        paintPageBackdrop(resolvedPage)
-                        if (rootSize.width > 0 && rootSize.height > 0) {
-                            val rootW = rootSize.width.toFloat()
-                            val rootH = rootSize.height.toFloat()
-                            // 底座左/上缘在画布坐标里的位置 = 根容器原点(0) − 画布原点
-                            val baseL = -originX.toFloat()
-                            val baseT = -originY.toFloat()
-                            val radius = rootH / 2f
-                            val fw = android.graphics.Paint()
-                            fw.color = palette.card.toArgb()
-                            drawIntoCanvas { canvas ->
-                                canvas.nativeCanvas.drawRoundRect(
-                                    baseL, baseT, baseL + rootW, baseT + rootH, radius, radius, fw,
-                                )
-                            }
-                            // web: 底座的 1px 描边也要画进纹理 —— 玻璃压在底座上，斜面会把框线折出来；
-                            //      不画的话玻璃盖住的那一段边框就断了。颜色与真实边框同源（palette.input）。
-                            fw.style = android.graphics.Paint.Style.STROKE
-                            fw.strokeWidth = 1f * d
-                            fw.color = palette.input.toArgb()
-                            drawIntoCanvas { canvas ->
-                                canvas.nativeCanvas.drawRoundRect(
-                                    baseL + 0.5f * d,
-                                    baseT + 0.5f * d,
-                                    baseL + rootW - 0.5f * d,
-                                    baseT + rootH - 0.5f * d,
-                                    radius - 0.5f * d,
-                                    radius - 0.5f * d,
-                                    fw,
-                                )
-                            }
-                        }
-                    },
+                backdrop = {
+                    drawSegmentedTrack(
+                        Offset(-originX.toFloat(), -originY.toFloat()),
+                        Size(rootSize.width.toFloat(), rootSize.height.toFloat()),
+                        palette.card,
+                        palette.input,
+                    )
+                },
                 // ── web: paintInk（内容层：字 / 图标，一律用激活色重绘）────
                 ink = {
                     geom.forEachIndexed { i, g ->
@@ -701,7 +644,7 @@ private fun SegmentedToggleGroup(
                             val painter = painters.getOrNull(i) ?: return@let
                             drawIntoCanvas { canvas ->
                                 canvas.save()
-                                canvas.translate(iconBox.left - originX, iconBox.top - originY)
+                                canvas.translate(iconBox.left - origin.x - originX, iconBox.top - origin.y - originY)
                                 with(painter) {
                                     draw(
                                         Size(iconBox.width, iconBox.height),
@@ -716,8 +659,8 @@ private fun SegmentedToggleGroup(
                             drawText(
                                 lr,
                                 topLeft = Offset(
-                                    labelBox.center.x - originX - lr.size.width / 2f,
-                                    labelBox.center.y - originY - lr.size.height / 2f,
+                                    labelBox.center.x - origin.x - originX - lr.size.width / 2f,
+                                    labelBox.center.y - origin.y - originY - lr.size.height / 2f,
                                 ),
                             )
                         }
@@ -726,6 +669,23 @@ private fun SegmentedToggleGroup(
             )
         }
     }
+}
+
+/**
+ * 绘制分段底座和描边。正常绘制与玻璃采样共用边界、颜色和抗锯齿。
+ */
+private fun DrawScope.drawSegmentedTrack(origin: Offset, bounds: Size, fill: Color, border: Color) {
+    val stroke = 1.dp.toPx()
+    val radius = minOf(bounds.width, bounds.height) / 2f
+    if (radius <= stroke / 2f) return
+    drawRoundRect(fill, origin, bounds, CornerRadius(radius))
+    drawRoundRect(
+        color = border,
+        topLeft = origin + Offset(stroke / 2f, stroke / 2f),
+        size = Size(bounds.width - stroke, bounds.height - stroke),
+        cornerRadius = CornerRadius(radius - stroke / 2f),
+        style = Stroke(stroke),
+    )
 }
 
 /** 段文字：与 ink 层共用同一个 TextStyle（连 LocalMuiTextStyle 继承都一致） */

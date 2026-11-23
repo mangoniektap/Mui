@@ -9,12 +9,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -61,7 +63,9 @@ fun MuiInput(
     val palette = LocalMuiPalette.current
     val isDark = LocalIsDark.current
     val shape = RoundedCornerShape(MuiRadius.md)
-    val borderColor = if (invalid) palette.destructive else palette.input
+    val isInvalid = invalid || LocalMuiFormFieldInvalid.current
+    val submit = LocalMuiFormSubmit.current
+    val borderColor = if (isInvalid) palette.destructive else palette.input
     val controlBackground = if (isDark) {
         palette.input.copy(alpha = palette.input.alpha * 0.30f)
     } else {
@@ -71,10 +75,11 @@ fun MuiInput(
     Box(
         modifier = modifier
             .height(36.dp)
+            .alpha(if (enabled) 1f else 0.5f)
             .background(controlBackground, shape)
             .border(1.dp, borderColor, shape)
             .muiElevation("xs", shape)
-            .muiFocusRing(interactionSource, shape, invalid)
+            .muiFocusRing(interactionSource, shape, isInvalid)
             .padding(horizontal = 12.dp),
         contentAlignment = Alignment.CenterStart,
     ) {
@@ -85,6 +90,7 @@ fun MuiInput(
             enabled = enabled,
             singleLine = singleLine,
             keyboardOptions = keyboardOptions,
+            keyboardActions = if (submit == null) KeyboardActions.Default else KeyboardActions(onDone = { submit() }),
             textStyle = TextStyle(
                 fontSize = 14.sp,
                 lineHeight = 20.sp,

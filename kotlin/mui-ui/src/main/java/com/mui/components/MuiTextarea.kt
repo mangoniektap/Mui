@@ -12,13 +12,14 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mui.theme.LocalMuiPalette
+import com.mui.theme.LocalIsDark
 import com.mui.token.MuiRadius
 import com.mui.theme.muiElevation
 import com.mui.theme.muiFocusRing
@@ -48,15 +49,18 @@ fun MuiTextarea(
 ) {
     val palette = LocalMuiPalette.current
     val shape = RoundedCornerShape(MuiRadius.md)
-    val borderColor = if (invalid) palette.destructive else palette.input
+    val isInvalid = invalid || LocalMuiFormFieldInvalid.current
+    val borderColor = if (isInvalid) palette.destructive else palette.input
+    val background = if (LocalIsDark.current) palette.input.copy(alpha = palette.input.alpha * 0.30f) else Color.Transparent
 
     Box(
         modifier = modifier
             .heightIn(min = minHeight)
-            .background(Color.Transparent, shape)
+            .alpha(if (enabled) 1f else 0.5f)
+            .background(background, shape)
             .border(1.dp, borderColor, shape)
             .muiElevation("xs", shape)
-            .muiFocusRing(interactionSource, shape, invalid)
+            .muiFocusRing(interactionSource, shape, isInvalid)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         contentAlignment = Alignment.TopStart,
     ) {

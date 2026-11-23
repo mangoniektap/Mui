@@ -1,5 +1,6 @@
 package com.mui.components
 
+import androidx.compose.animation.core.EaseOut
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.animation.core.tween
@@ -16,6 +17,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -37,8 +40,6 @@ import com.mui.token.MuiRadius
 import com.mui.theme.muiFocusRing
 import com.mui.theme.rememberMuiInteractionSource
 
-// TODO: web 的手风琴互斥展开（type="single"/"multiple" 语义）由调用方自管 open 状态实现
-
 /**
  * 手风琴：可展开收起的列表项容器（边框分隔 + chevron 旋转 + 高度动画 + 聚焦环）。
  * 输入 = 标题 + 展开态 + 内容槽；输出 = 展开/收起回调。
@@ -53,6 +54,52 @@ fun MuiAccordion(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(modifier = modifier, content = content)
+}
+
+/** 带稳定标识的手风琴项，展开内容复用 MuiAccordionItem。 */
+data class MuiAccordionEntry(
+    val value: String,
+    val title: String,
+    val content: @Composable ColumnScope.() -> Unit,
+)
+
+/** 由组件维护互斥或多项展开，也可用 expanded 接管状态。 */
+@Composable
+fun MuiAccordion(
+    entries: List<MuiAccordionEntry>,
+    modifier: Modifier = Modifier,
+    multiple: Boolean = false,
+    collapsible: Boolean = false,
+    expanded: Set<String>? = null,
+    defaultExpanded: Set<String> = emptySet(),
+    onExpandedChange: ((Set<String>) -> Unit)? = null,
+) {
+    var inner by remember { mutableStateOf(defaultExpanded) }
+    val values = (expanded ?: inner).let { if (multiple) it else it.take(1).toSet() }
+    MuiAccordion(modifier) {
+        entries.forEachIndexed { index, entry ->
+            key(entry.value) {
+                MuiAccordionItem(
+                    title = entry.title,
+                    open = entry.value in values,
+                    showBottomBorder = index < entries.lastIndex,
+                    onOpenChange = { open ->
+                        val next = when {
+                            open && multiple -> values + entry.value
+                            open -> setOf(entry.value)
+                            multiple || collapsible -> values - entry.value
+                            else -> values
+                        }
+                        if (next != values) {
+                            if (expanded == null) inner = next
+                            onExpandedChange?.invoke(next)
+                        }
+                    },
+                    content = entry.content,
+                )
+            }
+        }
+    }
 }
 
 /**
@@ -82,13 +129,13 @@ fun MuiAccordionItem(
 
     val chevronRotation by animateFloatAsState(
         targetValue = if (open) 180f else 0f,
-        animationSpec = tween(durationMillis = 200),
+        animationSpec = tween(durationMillis = 200, easing = EaseOut),
     )
 
     var contentHeight by remember { mutableIntStateOf(0) }
     val animatedHeight by animateIntAsState(
         targetValue = if (open) contentHeight else 0,
-        animationSpec = tween(durationMillis = 200),
+        animationSpec = tween(durationMillis = 200, easing = EaseOut),
     )
 
     Column(

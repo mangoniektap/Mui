@@ -27,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,6 +42,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -67,9 +69,14 @@ import com.mui.theme.muiFocusRing
 import com.mui.theme.rememberMuiInteractionSource
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.floor
+import kotlin.math.round
 import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** 一档的高度；容器高 = ITEM_H × VISIBLE */
@@ -92,7 +99,7 @@ private const val PICKER_SNAP_MS = 260
 
 /**
  * 转盘选择器：调用方只给数值范围 + 单位，组件自己铺出整条刻度。
- * 交互：按住上下拖，松手吸附到最近一档（滚轮桌面交互未移植）。
+ * 交互：上下拖拽或滚轮滚动，结束后吸附到最近一档。
  * 选中条 = gray 档玻璃，只做高亮，指针穿透。
  * 数字沿前弧排布（sin 定位置、cos 定大小淡出、rotateX 倾斜），圆只是视觉：
  * 刻度列表是直的、两端不循环，转过侧面的档（|θ| ≥ π/2）不画。
@@ -126,8 +133,14 @@ fun MuiPicker(
     val interactionSource = rememberMuiInteractionSource()
 
     val values = remember(min, max, step) {
-        val n = ((max - min) / step + 1e-9f).toInt() + 1
-        (0 until n.coerceAtLeast(0)).map { i -> ((min + i * step) * 1e6f).roundToInt() / 1e6f }
+        if (!min.isFinite() || !max.isFinite() || !step.isFinite() || step <= 0f || max < min) {
+            emptyList()
+        } else {
+            val count = floor((max.toDouble() - min) / step + 1e-6).toInt() + 1
+            List(count.coerceAtLeast(0)) { index ->
+                (round((min.toDouble() + index * step.toDouble()) * 1e6) / 1e6).toFloat()
+            }
+        }
     }
     var inner by remember { mutableStateOf(defaultValue ?: values.firstOrNull() ?: min) }
     val current = value ?: inner
@@ -140,35 +153,58 @@ fun MuiPicker(
     /** 展开那一刻触发器在 root 里的位置：页面一滚，浮层就跟丢了，直接收起来 */
     var openAtPos by remember { mutableStateOf(Offset.Zero) }
     val scroll = remember { Animatable(0f) }
-    var dragging by remember { mutableStateOf(false) }
+    var directOffset by remember { mutableStateOf<Float?>(null) }
+    var snapAnimation by remember { mutableStateOf<Job?>(null) }
+    var snapIndex by remember { mutableStateOf<Int?>(null) }
 
     val maxScroll = ((values.size - 1) * PICKER_ITEM_H).coerceAtLeast(0f)
     val label: (Float) -> String = { v -> format?.invoke(v) ?: trimNum(v) }
 
-    // 展开时把轮盘定位到当前档
     LaunchedEffect(open, index, maxScroll) {
-        if (open && !dragging) {
+        if (!open) {
+            snapAnimation?.cancel()
+            snapIndex = null
+            directOffset = null
+        } else if (directOffset == null && snapIndex != index) {
+            snapAnimation?.cancel()
+            snapIndex = null
             scroll.snapTo((index * PICKER_ITEM_H).coerceIn(0f, maxScroll))
         }
     }
 
+    fun moveTo(position: Float) {
+        snapAnimation?.cancel()
+        snapIndex = null
+        directOffset = position.coerceIn(-PICKER_ITEM_H, maxScroll + PICKER_ITEM_H)
+    }
+
     fun snap() {
-        val i = (scroll.value / PICKER_ITEM_H).roundToInt().coerceIn(0, values.size - 1)
-        val next = values.getOrNull(i) ?: return
-        scope.launch {
-            scroll.animateTo(i * PICKER_ITEM_H, tween(PICKER_SNAP_MS, easing = EaseOutCubic))
+        if (values.isEmpty()) return
+        val from = directOffset ?: scroll.value
+        val index = (from / PICKER_ITEM_H).roundToInt().coerceIn(values.indices)
+        val next = values[index]
+        snapAnimation?.cancel()
+        snapIndex = index
+        snapAnimation = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            scroll.snapTo(from)
+            directOffset = null
+            scroll.animateTo(index * PICKER_ITEM_H, tween(PICKER_SNAP_MS, easing = EaseOutCubic))
+            snapIndex = null
         }
         if (next != current) {
             if (value == null) inner = next
             onValueChange?.invoke(next)
         }
     }
+    val latestSnap by rememberUpdatedState { snap() }
+    val latestMoveTo by rememberUpdatedState<(Float) -> Unit> { moveTo(it) }
 
     Box(modifier = modifier) {
         // 触发器：h-9 圆角 md 描边；展开时隐形但保留占位（轮盘中心对准它）
         Box(
             Modifier
                 .alpha(if (open) 0f else 1f)
+                .muiFocusRing(interactionSource, RoundedCornerShape(MuiRadius.md))
                 .clip(RoundedCornerShape(MuiRadius.md))
                 .background(
                     if (isDark) {
@@ -177,11 +213,10 @@ fun MuiPicker(
                 )
                 .border(1.dp, palette.input, RoundedCornerShape(MuiRadius.md))
                 .muiElevation("xs", RoundedCornerShape(MuiRadius.md))
-                .muiFocusRing(interactionSource, RoundedCornerShape(MuiRadius.md))
                 .clickable(
                     interactionSource = interactionSource,
                     indication = null,
-                    enabled = !disabled,
+                    enabled = !disabled && values.isNotEmpty(),
                 ) {
                     if (!open) openAtPos = triggerPos
                     open = !open
@@ -255,23 +290,43 @@ fun MuiPicker(
                     .pointerInput(values.size, maxScroll) {
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
-                            dragging = true
-                            val y0 = down.position.y
-                            val s0 = scroll.value
+                            val from = directOffset ?: scroll.value
+                            latestMoveTo(from)
                             try {
                                 while (true) {
                                     val event = awaitPointerEvent()
                                     val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                                    val target = (s0 - (change.position.y - y0))
-                                        .coerceIn(-PICKER_ITEM_H, maxScroll + PICKER_ITEM_H)
-                                    scope.launch { scroll.snapTo(target) }
+                                    val distance = (change.position.y - down.position.y).toDp().value
+                                    latestMoveTo(from - distance)
                                     change.consume()
                                     if (!change.pressed) break
                                 }
                             } finally {
-                                dragging = false
+                                latestSnap()
                             }
-                            snap()
+                        }
+                    }
+                    .pointerInput(values.size, maxScroll) {
+                        var wheelPause: Job? = null
+                        try {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    if (event.type == PointerEventType.Scroll) {
+                                        val change = event.changes.firstOrNull { !it.isConsumed } ?: continue
+                                        val from = directOffset ?: scroll.value
+                                        latestMoveTo(from + change.scrollDelta.y * PICKER_ITEM_H)
+                                        change.consume()
+                                        wheelPause?.cancel()
+                                        wheelPause = scope.launch {
+                                            delay(140)
+                                            latestSnap()
+                                        }
+                                    }
+                                }
+                            }
+                        } finally {
+                            wheelPause?.cancel()
                         }
                     },
             ) {
@@ -305,14 +360,14 @@ fun MuiPicker(
                     Modifier.align(Alignment.Center),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    val scrollPx = scroll.value
+                    val scrollOffset = directOffset ?: scroll.value
                     Box(
                         Modifier
                             .width(20.dp)
                             .height(wheelH)
                     ) {
                         values.forEachIndexed { i, v ->
-                            val theta = (i * PICKER_ITEM_H - scrollPx) / PICKER_RADIUS
+                            val theta = (i * PICKER_ITEM_H - scrollOffset) / PICKER_RADIUS
                             // 只画前弧：θ 未取模，转过侧面的档直接不画。
                             // 只判 cos 不够 —— 差一整圈（≈11.17 档）的档会转回正面、叠在同一行
                             if (abs(theta) >= (Math.PI / 2).toFloat()) return@forEachIndexed

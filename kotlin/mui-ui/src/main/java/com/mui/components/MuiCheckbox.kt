@@ -2,8 +2,7 @@ package com.mui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.focusable
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.triStateToggleable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
@@ -15,6 +14,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
@@ -24,7 +25,6 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import com.mui.theme.LocalIsDark
 import com.mui.theme.LocalMuiPalette
-import com.mui.token.MuiRadius
 import com.mui.theme.muiElevation
 import com.mui.theme.muiFocusRing
 import com.mui.theme.rememberMuiInteractionSource
@@ -34,10 +34,9 @@ import com.mui.theme.rememberMuiInteractionSource
  * indeterminate = 中横线；聚焦 3dp 环；disabled 半透明。
  * 输入 = checked / defaultChecked / onCheckedChange（受控非受控与 web 对齐）；输出 = 状态变化回调。
  * 硬约束：禁 material3；视觉全走令牌。
- * TODO: web 的圆角是 rounded-[4px]（任意值），本实现按任务规范走 MuiRadius.sm。
  *
  * @param checked 受控状态（null = 非受控，走 defaultChecked）
- * @param onCheckedChange 状态变化回调（null = 只读展示）
+ * @param onCheckedChange 可选的状态变化回调
  * @param modifier 布局修饰
  * @param defaultChecked 初始状态（非受控时用）
  * @param indeterminate 半选态：中横线（优先于 checked 的 ✓）
@@ -60,7 +59,8 @@ fun MuiCheckbox(
     val isDark = LocalIsDark.current
     var inner by remember { mutableStateOf(defaultChecked) }
     val isChecked = checked ?: inner
-    val shape = RoundedCornerShape(MuiRadius.sm)
+    val shape = RoundedCornerShape(4.dp)
+    val interactive = !disabled && (checked == null || onCheckedChange != null)
 
     val background = when {
         isChecked || indeterminate -> palette.primary
@@ -78,18 +78,19 @@ fun MuiCheckbox(
         modifier = modifier
             .size(16.dp)
             .alpha(if (disabled) 0.5f else 1f)
+            .muiFocusRing(interactionSource, shape, invalid)
             .clip(shape)
             .background(background, shape)
             .border(1.dp, borderColor, shape)
-            .muiElevation("2xs", shape)
-            .muiFocusRing(interactionSource, shape, invalid)
-            .focusable(enabled = !disabled && onCheckedChange != null, interactionSource = interactionSource)
-            .clickable(
+            .muiElevation("xs", shape)
+            .triStateToggleable(
+                state = if (indeterminate) ToggleableState.Indeterminate else if (isChecked) ToggleableState.On else ToggleableState.Off,
+                role = Role.Checkbox,
                 interactionSource = interactionSource,
                 indication = null,
-                enabled = !disabled && onCheckedChange != null,
+                enabled = interactive,
                 onClick = {
-                    val next = !isChecked
+                    val next = indeterminate || !isChecked
                     if (checked == null) inner = next
                     onCheckedChange?.invoke(next)
                 },

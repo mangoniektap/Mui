@@ -10,21 +10,21 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.unit.dp
 
 /**
  * 聚焦环配方（classicalFocusRing 的对应物）：聚焦时在控件外画 3dp 描边环。
  *
  * web 版 = focus-visible:border-ring + ring-[3px] ring-ring/50；
- * Compose 侧把环画在轮廓上（描边中心贴边），颜色随 [invalid] 切 destructive。
+ * Compose 侧把环画在轮廓外，颜色随 [invalid] 切 destructive。修饰符应放在组件自身的 clip 前。
  *
  * @param interactionSource 组件自己的 interactionSource（读取聚焦态）
  * @param shape 控件轮廓
@@ -91,16 +91,12 @@ fun Color.withAlphaFrac(frac: Float): Color = copy(alpha = frac)
  * @param widthPx 描边宽度（px）
  */
 private fun DrawScope.drawOutlineCompat(outline: Outline, color: Color, widthPx: Float) {
-    val style = Stroke(width = widthPx)
-    when (outline) {
-        is Outline.Rectangle -> drawRect(color, outline.rect.topLeft, outline.rect.size, style = style)
-        is Outline.Rounded -> drawRoundRect(
-            color = color,
-            topLeft = Offset(outline.roundRect.left, outline.roundRect.top),
-            size = Size(outline.roundRect.width, outline.roundRect.height),
-            cornerRadius = CornerRadius(outline.roundRect.topLeftCornerRadius.x),
-            style = style,
-        )
-        is Outline.Generic -> drawPath(outline.path, color, style = style)
+    val path = when (outline) {
+        is Outline.Rectangle -> Path().apply { addRect(outline.rect) }
+        is Outline.Rounded -> Path().apply { addRoundRect(outline.roundRect) }
+        is Outline.Generic -> outline.path
+    }
+    clipPath(path, ClipOp.Difference) {
+        drawPath(path, color, style = Stroke(width = widthPx * 2f))
     }
 }

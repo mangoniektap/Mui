@@ -239,6 +239,7 @@ fun MibuCat(
         modifier = modifier
             .size(48.dp)
             .alpha(if (disabled) 0.5f else 1f)
+            .muiFocusRing(interactionSource, shape)
             .clip(shape)
             .background(
                 if (hovered || pressed) {
@@ -246,7 +247,6 @@ fun MibuCat(
                 } else Color.Transparent,
                 shape,
             )
-            .muiFocusRing(interactionSource, shape)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,

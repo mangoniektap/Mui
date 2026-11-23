@@ -78,7 +78,7 @@ fun MuiButton(
     val background by animateColorAsState(surface.background, colorSpec, label = "buttonBackground")
     val foreground by animateColorAsState(surface.foreground, colorSpec, label = "buttonForeground")
     val borderColor by animateColorAsState(surface.borderColor, colorSpec, label = "buttonBorder")
-    val shape = RoundedCornerShape(MuiRadius.md)
+    val shape = LocalMuiButtonGroupShape.current ?: RoundedCornerShape(MuiRadius.md)
     val textStyle = muiButtonTextStyle(size).copy(
         textDecoration = if (variant == ButtonVariant.Link && (hovered || pressed)) {
             TextDecoration.Underline

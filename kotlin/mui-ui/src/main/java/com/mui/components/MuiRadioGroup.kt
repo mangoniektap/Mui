@@ -3,7 +3,8 @@ package com.mui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
@@ -41,9 +43,9 @@ fun MuiRadioGroup(
 ) {
     when (orientation) {
         Orientation.Vertical ->
-            Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) { content() }
+            Column(modifier = modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(12.dp)) { content() }
         Orientation.Horizontal ->
-            Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(12.dp)) { content() }
+            Row(modifier = modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(12.dp)) { content() }
     }
 }
 
@@ -71,9 +73,9 @@ fun MuiRadioGroupItem(
     val isDark = LocalIsDark.current
     val shape = RoundedCornerShape(50)
     val dotColor = palette.primary
+    val isInvalid = invalid || LocalMuiFormFieldInvalid.current
     val borderColor = when {
-        invalid -> palette.destructive
-        selected -> palette.primary
+        isInvalid -> palette.destructive
         else -> palette.input
     }
     val circleBackground = if (isDark) {
@@ -86,13 +88,14 @@ fun MuiRadioGroupItem(
         modifier = modifier
             .size(16.dp)
             .alpha(if (disabled) 0.5f else 1f)
+            .muiFocusRing(interactionSource, shape, isInvalid)
             .clip(shape)
             .background(circleBackground, shape)
             .border(1.dp, borderColor, shape)
-            .muiElevation("2xs", shape)
-            .muiFocusRing(interactionSource, shape, invalid)
-            .focusable(enabled = !disabled, interactionSource = interactionSource)
-            .clickable(
+            .muiElevation("xs", shape)
+            .selectable(
+                selected = selected,
+                role = Role.RadioButton,
                 interactionSource = interactionSource,
                 indication = null,
                 enabled = !disabled,

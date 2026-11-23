@@ -126,8 +126,9 @@ fun MuiSelect(
 
     val current = options.firstOrNull { it.value == selectedValue }
     val h = if (triggerSize == SelectTriggerSize.Sm) 32.dp else 36.dp
-    val triggerShape = shape
-    val borderColor = if (invalid) palette.destructive else palette.input
+    val triggerShape = LocalMuiButtonGroupShape.current ?: shape
+    val isInvalid = invalid || LocalMuiFormFieldInvalid.current
+    val borderColor = if (isInvalid) palette.destructive else palette.input
     var triggerHeightPx by remember { mutableStateOf(0) }
     var triggerWidthPx by remember { mutableStateOf(0) }
     /** 触发器在窗口里的矩形（px）：item-aligned 定位与上下反转都按它算 */
@@ -144,6 +145,7 @@ fun MuiSelect(
                     triggerWidthPx = it.width
                 }
                 .onGloballyPositioned { triggerWinRect = it.boundsInWindow().toLegacyIntRect() }
+                .muiFocusRing(interactionSource, triggerShape, isInvalid)
                 .clip(triggerShape)
                 .background(
                     if (isDark) {
@@ -155,7 +157,6 @@ fun MuiSelect(
                 )
                 .border(1.dp, borderColor, triggerShape)
                 .muiElevation("xs", triggerShape)
-                .muiFocusRing(interactionSource, triggerShape, invalid)
                 .clickable(
                     interactionSource = interactionSource,
                     indication = null,

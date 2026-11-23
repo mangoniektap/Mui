@@ -3,8 +3,10 @@ package com.mui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +20,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -25,6 +29,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
@@ -47,6 +60,8 @@ import com.mui.token.MuiRadius
 import com.mui.theme.muiElevation
 import com.mui.theme.rememberMuiInteractionSource
 
+internal val LocalMuiMenuDismiss = staticCompositionLocalOf<(() -> Unit)?> { null }
+
 /**
  * 下拉菜单：触发器槽 + Popup 菜单表面（bg-popover + border + shadow-md + rounded-md）。
  * 菜单内容用条目 lambda 组合（MuiDropdownMenuItem / Label / Separator / CheckboxItem / RadioItem / SubMenu），
@@ -66,19 +81,18 @@ fun MuiDropdownMenu(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val density = androidx.compose.ui.platform.LocalDensity.current
-    var triggerHeight by remember { mutableIntStateOf(0) }
-    Box(modifier.onSizeChanged { triggerHeight = it.height }) {
+    Box(modifier) {
         trigger()
-    }
-    if (open) {
-        Popup(
-            alignment = Alignment.TopStart,
-            offset = IntOffset(0, triggerHeight + with(density) { 4.dp.roundToPx() }),
-            onDismissRequest = { onOpenChange(false) },
-            properties = PopupProperties(focusable = true),
-        ) {
-            MuiMenuSurface(content = content)
+        if (open) {
+            Popup(
+                popupPositionProvider = rememberMuiPopupPosition(MuiPopupSide.Bottom, 4.dp, alignStart = true),
+                onDismissRequest = { onOpenChange(false) },
+                properties = PopupProperties(focusable = true),
+            ) {
+                CompositionLocalProvider(LocalMuiMenuDismiss provides { onOpenChange(false) }) {
+                    MuiMenuSurface(content = content)
+                }
+            }
         }
     }
 }
@@ -97,9 +111,27 @@ fun MuiMenuSurface(
 ) {
     val palette = LocalMuiPalette.current
     val shape = RoundedCornerShape(MuiRadius.md)
+    val focusManager = LocalFocusManager.current
+    val focusRequester = remember { FocusRequester() }
+    val dismiss = LocalMuiMenuDismiss.current
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
     CompositionLocalProvider(LocalMuiContentColor provides palette.popoverForeground) {
         Column(
             modifier = modifier
+                .focusRequester(focusRequester)
+                .onPreviewKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    when (event.key) {
+                        Key.DirectionDown -> focusManager.moveFocus(FocusDirection.Down)
+                        Key.DirectionUp -> focusManager.moveFocus(FocusDirection.Up)
+                        Key.Escape -> if (dismiss == null) false else {
+                            dismiss()
+                            true
+                        }
+                        else -> false
+                    }
+                }
+                .focusable()
                 .widthIn(min = 128.dp)
                 .background(palette.popover, shape)
                 .border(1.dp, palette.border, shape)
@@ -116,7 +148,7 @@ fun MuiMenuSurface(
  *
  * @param text 条目文字
  * @param onClick 点击回调
- * @param onDismiss 点击后关闭菜单的回调（可为 null = 不关闭）
+ * @param onDismiss 点击后关闭菜单的回调（null 时沿用菜单默认关闭行为）
  * @param modifier 布局修饰
  * @param enabled 可用性（false = 半透明且不可点）
  * @param destructive 危险项样式
@@ -141,16 +173,19 @@ fun MuiDropdownMenuItem(
     val palette = LocalMuiPalette.current
     val isDark = LocalIsDark.current
     val hovered by interactionSource.collectIsHoveredAsState()
+    val focused by interactionSource.collectIsFocusedAsState()
+    val highlighted = hovered || focused
+    val dismiss = onDismiss ?: LocalMuiMenuDismiss.current
     val shape = RoundedCornerShape(MuiRadius.sm)
 
     val background = when {
-        destructive && hovered -> palette.destructive.copy(alpha = if (isDark) 0.20f else 0.10f)
-        hovered -> palette.accent
+        destructive && highlighted -> palette.destructive.copy(alpha = if (isDark) 0.20f else 0.10f)
+        highlighted -> palette.accent
         else -> Color.Transparent
     }
     val contentColor = when {
         destructive -> palette.destructive
-        hovered -> palette.accentForeground
+        highlighted -> palette.accentForeground
         else -> Color.Unspecified
     }
 
@@ -164,7 +199,7 @@ fun MuiDropdownMenuItem(
                 enabled = enabled,
             ) {
                 onClick()
-                onDismiss?.invoke()
+                dismiss?.invoke()
             }
             .alpha(if (enabled) 1f else 0.5f)
             .then(if (inset) Modifier.padding(start = 32.dp) else Modifier)
@@ -245,7 +280,7 @@ fun MuiDropdownMenuShortcut(
  * @param text 条目文字
  * @param checked 是否勾选
  * @param onCheckedChange 勾选态变化回调
- * @param onDismiss 点击后关闭菜单的回调（可为 null = 不关闭）
+ * @param onDismiss 点击后关闭菜单的回调（null 时沿用菜单默认关闭行为）
  * @param modifier 布局修饰
  * @param enabled 可用性
  * @param interactionSource 交互源
@@ -283,7 +318,7 @@ fun MuiDropdownMenuCheckboxItem(
  * @param text 条目文字
  * @param selected 是否选中
  * @param onClick 选中回调
- * @param onDismiss 点击后关闭菜单的回调（可为 null = 不关闭）
+ * @param onDismiss 点击后关闭菜单的回调（null 时沿用菜单默认关闭行为）
  * @param modifier 布局修饰
  * @param enabled 可用性
  * @param interactionSource 交互源
@@ -340,6 +375,7 @@ fun MuiDropdownMenuSubMenu(
 ) {
     val palette = LocalMuiPalette.current
     val contentColor = LocalMuiContentColor.current
+    val dismiss = onDismiss ?: LocalMuiMenuDismiss.current
     val hovered = remember { MutableInteractionSource() }
     var open by remember { mutableStateOf(false) }
     var itemWidth by remember { mutableIntStateOf(0) }
@@ -360,12 +396,13 @@ fun MuiDropdownMenuSubMenu(
         )
         if (open) {
             Popup(
-                alignment = Alignment.TopStart,
-                offset = IntOffset(itemWidth, 0),
+                popupPositionProvider = rememberMuiPopupPosition(MuiPopupSide.Right, 4.dp, alignStart = true),
                 onDismissRequest = { open = false },
                 properties = PopupProperties(focusable = true),
             ) {
-                MuiMenuSurface(content = content)
+                CompositionLocalProvider(LocalMuiMenuDismiss provides dismiss) {
+                    MuiMenuSurface(content = content)
+                }
             }
         }
     }

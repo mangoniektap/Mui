@@ -29,7 +29,6 @@ import com.mui.theme.LocalMuiContentColor
 import com.mui.theme.LocalMuiPalette
 import com.mui.theme.rememberMuiInteractionSource
 
-// TODO: web 的 TableFooter（bg-muted/50 顶线）未移植。
 // TODO: web 的行扩展（aria-expanded）与 data-selected 由调用方以 selected 参数近似。
 // TODO: 横向滚动容器（overflow-x-auto）由调用方包 MuiScrollArea 实现。
 
@@ -77,6 +76,27 @@ fun MuiTableBody(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(modifier = modifier.fillMaxWidth(), content = content)
+}
+
+/** 表脚使用 muted/50 底色、顶部 1dp 分隔线和中等字重。 */
+@Composable
+fun MuiTableFooter(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val palette = LocalMuiPalette.current
+    val textStyle = LocalMuiTextStyle.current.copy(fontWeight = FontWeight.Medium)
+    CompositionLocalProvider(LocalMuiTextStyle provides textStyle) {
+        Column(
+            modifier.fillMaxWidth()
+                .background(palette.muted.copy(alpha = palette.muted.alpha * 0.5f))
+                .drawBehind {
+                    val width = 1.dp.toPx()
+                    drawLine(palette.border, Offset(0f, width / 2), Offset(size.width, width / 2), width)
+                },
+            content = content,
+        )
+    }
 }
 
 /**

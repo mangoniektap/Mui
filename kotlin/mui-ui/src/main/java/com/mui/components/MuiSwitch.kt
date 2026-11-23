@@ -1,5 +1,7 @@
 package com.mui.components
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.EaseOut
 import androidx.compose.animation.core.tween
@@ -17,9 +19,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -29,6 +31,17 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -37,16 +50,14 @@ import com.mui.glass.GlassLens
 import com.mui.glass.glassCanvasPx
 import com.mui.glass.GlassShadowLevel
 import com.mui.glass.LensShape
-import com.mui.glass.paintPageBackdrop
+import com.mui.glass.glassPageColor
 import com.mui.theme.LocalIsDark
-import com.mui.theme.LocalMuiPageColor
 import com.mui.theme.LocalMuiPalette
 import com.mui.theme.muiElevation
 import com.mui.theme.muiFocusRing
 import com.mui.theme.rememberMuiInteractionSource
 import kotlin.math.abs
 import kotlin.math.roundToInt
-import kotlinx.coroutines.launch
 
 /** 三档尺寸：轨道 w×h；thumb 高 = 轨道高 − 2×缝，四边等粗 */
 enum class SwitchSize(val trackW: Float, val trackH: Float, val thumbW: Float, val thumbH: Float) {
@@ -99,9 +110,8 @@ fun MuiSwitch(
 ) {
     val palette = LocalMuiPalette.current
     val isDark = LocalIsDark.current
-    val pageColor = LocalMuiPageColor.current
+    val pageColor = glassPageColor()
     val density = LocalDensity.current
-    val scope = rememberCoroutineScope()
 
     var inner by remember { mutableStateOf(defaultChecked) }
     val isChecked = checked ?: inner
@@ -109,6 +119,8 @@ fun MuiSwitch(
     var pressed by remember { mutableStateOf(false) }
     var dragging by remember { mutableStateOf(false) }
     var dragX by remember { mutableFloatStateOf(0f) }
+    var releaseX by remember { mutableStateOf<Float?>(null) }
+    var releaseSequence by remember { mutableIntStateOf(0) }
 
     val inset = TRACK_INSET_DP.dp
     val margin = LENS_MARGIN_DP.dp
@@ -119,29 +131,29 @@ fun MuiSwitch(
     val travel = size.trackW - size.thumbW - TRACK_INSET_DP * 2
 
     // 球位移动画：静止/切档走 150ms ease-out；拖动中直接跟手
-    val animX = remember { Animatable(0f) }
-    LaunchedEffect(isChecked, travel, dragging) {
+    val animX = remember { Animatable(if (isChecked) travel else 0f) }
+    LaunchedEffect(isChecked, travel, dragging, releaseSequence) {
         val target = if (isChecked) travel else 0f
         if (!dragging) {
+            releaseX?.let {
+                animX.snapTo(it)
+                releaseX = null
+            }
             animX.animateTo(target, tween(durationMillis = 150, easing = EaseOut))
         }
     }
-    val displayX = if (dragging) (if (isChecked) travel else 0f) + dragX else animX.value
+    val displayX = if (dragging) (if (isChecked) travel else 0f) + dragX else releaseX ?: animX.value
     val clampedX = displayX.coerceIn(0f, travel)
 
     val trackShape = RoundedCornerShape(trackH / 2)
-    val trackColor = if (isChecked) {
+    val targetTrackColor = if (isChecked) {
         palette.primary
     } else if (isDark) {
         palette.input.copy(alpha = palette.input.alpha * 0.80f)
     } else {
         palette.input
     }
-    val resolvedPage = if (pageColor != androidx.compose.ui.graphics.Color.Unspecified) {
-        pageColor
-    } else {
-        palette.background
-    }
+    val trackColor by animateColorAsState(targetTrackColor, tween(150, easing = FastOutSlowInEasing), label = "switchTrack")
 
     // 同 ToggleGroup：pointerInput(disabled) 的手势协程捕获的是启动那次组合的快照，
     // checked / 回调 / 当前态都要走 rememberUpdatedState 读最新值。
@@ -162,8 +174,24 @@ fun MuiSwitch(
             .muiElevation("xs", trackShape)
             .background(trackColor, trackShape)
             .muiFocusRing(interactionSource, trackShape, invalid)
+            .semantics {
+                role = Role.Switch
+                toggleableState = if (isChecked) ToggleableState.On else ToggleableState.Off
+                if (!disabled) onClick {
+                    commit(!latestIsChecked)
+                    true
+                }
+            }
+            .onKeyEvent { event ->
+                if (disabled || (event.key != Key.Enter && event.key != Key.NumPadEnter && event.key != Key.Spacebar)) {
+                    false
+                } else {
+                    if (event.type == KeyEventType.KeyUp) commit(!latestIsChecked)
+                    true
+                }
+            }
             .focusable(enabled = !disabled, interactionSource = interactionSource)
-            .pointerInput(disabled) {
+            .pointerInput(disabled, travel) {
                 if (disabled) return@pointerInput
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -171,31 +199,36 @@ fun MuiSwitch(
                     dragging = false
                     dragX = 0f
                     var moved = false
+                    var released = false
                     try {
                         while (true) {
                             val event = awaitPointerEvent()
                             val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                            val dx = change.position.x - down.position.x
-                            if (!moved && abs(dx) > DRAG_THRESHOLD_DP.dp.toPx()) {
+                            val dx = (change.position.x - down.position.x).toDp().value
+                            if (!moved && abs(dx) > DRAG_THRESHOLD_DP) {
                                 moved = true
                                 dragging = true
-                                scope.launch { animX.snapTo(((if (latestIsChecked) travel else 0f) + dragX).coerceIn(0f, travel)) }
                             }
                             if (moved) {
                                 dragX = dx
                                 change.consume()
                             }
-                            if (!change.pressed) break
+                            if (!change.pressed) {
+                                released = true
+                                break
+                            }
                         }
                     } finally {
-                        val dx = dragX
+                        val endX = ((if (latestIsChecked) travel else 0f) + dragX).coerceIn(0f, travel)
+                        if (moved) {
+                            releaseX = endX
+                            releaseSequence++
+                        }
                         pressed = false
                         dragging = false
                         dragX = 0f
-                        if (moved) {
-                            commit((if (latestIsChecked) travel else 0f) + dx > travel / 2f)
-                        } else {
-                            commit(!latestIsChecked)
+                        if (released) {
+                            commit(if (moved) endX > travel / 2f else !latestIsChecked)
                         }
                     }
                 }
@@ -234,6 +267,7 @@ fun MuiSwitch(
             )
         }
         GlassLens(
+            pageColor = pageColor,
             modifier = Modifier
                 // 画布 = 球外扩四周 margin（= web 的 inset:-6px）：glassCanvas 显式摆放，
                 // 不吃父对齐也不被父约束夹（requiredSize/offset/绘制位移三条路都叠过错偏移）。
@@ -262,7 +296,6 @@ fun MuiSwitch(
             lensDecay = 0.35f,
             shadow = GlassShadowLevel.SM,
         ) {
-            paintPageBackdrop(resolvedPage)
             // 轨道在画布里的位置 = 画布原点取整后的负值（与球心同一套账，见上方 geo）
             val trackX = -geo.originX / d
             val trackY = -geo.originY / d

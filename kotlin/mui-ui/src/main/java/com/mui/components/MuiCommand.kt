@@ -1,6 +1,7 @@
 package com.mui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -13,21 +14,31 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
@@ -41,11 +52,11 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.mui.theme.LocalMuiContentColor
 import com.mui.theme.LocalMuiPalette
+import com.mui.theme.muiElevation
 import com.mui.token.MuiRadius
 import com.mui.theme.rememberMuiInteractionSource
 
-// TODO: web 的键盘上下选择与回车执行（cmdk data-selected）未移植，这里仅悬停高亮
-// TODO: web 的 CommandDialog（弹窗壳）未移植，只移植命令面板本体
+private val LocalCommandHighlighted = staticCompositionLocalOf { false }
 
 /** 命令面板条目：文字 + 可选快捷键 + 点击回调 */
 data class MuiCommandItemSpec(
@@ -99,9 +110,40 @@ fun MuiCommand(
         if (hit.isEmpty()) null else group to hit
     }
 
+    val commands = filtered.flatMap { it.second }
+    val listIndex = filtered.map { it.second.size }.scan(0) { offset, count -> offset + count + 1 }
+    val listState = rememberLazyListState()
+    var active by remember(search) { mutableIntStateOf(0) }
+    val index = active.coerceIn(0, (commands.size - 1).coerceAtLeast(0))
+    LaunchedEffect(active) {
+        if (active > 0) {
+            var group = 0
+            var remaining = index
+            for ((_, entries) in filtered) {
+                if (remaining < entries.size) {
+                    val row = listIndex[group] + remaining + 1
+                    if (listState.layoutInfo.visibleItemsInfo.none { it.index == row }) listState.scrollToItem(row)
+                    break
+                }
+                group++
+                remaining -= entries.size
+            }
+        }
+    }
+
     val shape = RoundedCornerShape(MuiRadius.md)
     Column(
         modifier = modifier
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown || commands.isEmpty()) return@onPreviewKeyEvent false
+                when (event.key) {
+                    Key.DirectionDown -> active = (index + 1).coerceAtMost(commands.lastIndex)
+                    Key.DirectionUp -> active = (index - 1).coerceAtLeast(0)
+                    Key.Enter, Key.NumPadEnter -> commands[index].onClick()
+                    else -> return@onPreviewKeyEvent false
+                }
+                true
+            }
             .background(palette.popover, shape)
             .clip(shape),
     ) {
@@ -132,7 +174,7 @@ fun MuiCommand(
             }
             MuiSeparator(modifier = Modifier.fillMaxWidth())
             // 结果列表：max-h-[300px]
-            LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp)) {
+            LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp)) {
                 if (filtered.isEmpty()) {
                     item(key = "empty") {
                         MuiText(
@@ -144,8 +186,8 @@ fun MuiCommand(
                         )
                     }
                 }
-                filtered.forEach { (group, items) ->
-                    item(key = "group-${group.label}") {
+                filtered.forEachIndexed { groupIndex, (group, items) ->
+                    item(key = "group-" + groupIndex) {
                         MuiText(
                             text = group.label,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
@@ -155,8 +197,15 @@ fun MuiCommand(
                             fontWeight = FontWeight.Medium,
                         )
                     }
-                    items(items, key = { "${group.label}-${it.label}" }) { item ->
-                        MuiCommandItemRow(item = item)
+                    items(
+                        count = items.size,
+                        key = { itemIndex -> "command-" + groupIndex + "-" + itemIndex },
+                    ) { itemIndex ->
+                        val item = items[itemIndex]
+                        val highlighted = index == listIndex[groupIndex] - groupIndex + itemIndex
+                        CompositionLocalProvider(LocalCommandHighlighted provides highlighted) {
+                            MuiCommandItemRow(item = item)
+                        }
                     }
                 }
             }
@@ -170,6 +219,27 @@ fun MuiCommand(
                 content = footer,
             )
         }
+    }
+}
+
+/** 用与 Web CommandDialog 对应的模态层承载命令面板。 */
+@Composable
+fun MuiCommandDialog(
+    open: Boolean,
+    onOpenChange: (Boolean) -> Unit,
+    groups: List<MuiCommandGroupSpec>,
+    modifier: Modifier = Modifier,
+) {
+    MuiCenteredDialog(open, onDismiss = { onOpenChange(false) }) {
+        val shape = RoundedCornerShape(MuiRadius.lg)
+        val palette = LocalMuiPalette.current
+        MuiCommand(
+            groups = groups,
+            modifier = modifier.padding(horizontal = 16.dp)
+                .widthIn(max = 512.dp)
+                .muiElevation("lg", shape)
+                .border(1.dp, palette.border, shape),
+        )
     }
 }
 
@@ -197,7 +267,7 @@ fun MuiCommandItemRow(
             .fillMaxWidth()
             .padding(horizontal = 4.dp)
             .clip(shape)
-            .background(if (hovered) palette.accent else Color.Transparent, shape)
+            .background(if (hovered || LocalCommandHighlighted.current) palette.accent else Color.Transparent, shape)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,

@@ -140,6 +140,7 @@ private fun MuiTabTrigger(
     Column(
         modifier = Modifier
             .alpha(if (!enabled) 0.5f else 1f)
+            .muiFocusRing(interaction, shape)
             .clip(shape)
             .background(
                 when {
@@ -150,7 +151,6 @@ private fun MuiTabTrigger(
                 },
                 shape,
             )
-            .muiFocusRing(interaction, shape)
             .clickable(
                 interactionSource = interaction,
                 indication = null,

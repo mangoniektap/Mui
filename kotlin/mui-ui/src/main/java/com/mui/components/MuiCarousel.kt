@@ -2,21 +2,31 @@ package com.mui.components
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -25,9 +35,6 @@ import androidx.compose.ui.unit.dp
 import com.mui.theme.LocalMuiPalette
 import com.mui.theme.rememberMuiInteractionSource
 import kotlinx.coroutines.launch
-
-// TODO: web 的键盘左右键翻页（onKeyDownCapture）与 embla opts/plugins 未移植。
-// TODO: 竖向轮播（orientation=vertical）未移植，只做 HorizontalPager。
 
 /**
  * 轮播：HorizontalPager 封装 + 页指示器 + 左右翻页钮。
@@ -50,6 +57,23 @@ fun MuiCarousel(
     navigation: (@Composable (onPrev: () -> Unit, canPrev: Boolean, onNext: () -> Unit, canNext: Boolean) -> Unit)? = null,
     content: @Composable (page: Int) -> Unit,
 ) {
+    MuiCarousel(
+        pageCount, modifier, pageSpacing, indicator, navigation,
+        orientation = Orientation.Horizontal, content = content,
+    )
+}
+
+/** 横向或纵向轮播。键盘方向键和按钮使用同一翻页逻辑。 */
+@Composable
+fun MuiCarousel(
+    pageCount: Int,
+    modifier: Modifier = Modifier,
+    pageSpacing: Dp = 16.dp,
+    indicator: (@Composable (page: Int, pageCount: Int) -> Unit)? = null,
+    navigation: (@Composable (onPrev: () -> Unit, canPrev: Boolean, onNext: () -> Unit, canNext: Boolean) -> Unit)? = null,
+    orientation: Orientation,
+    content: @Composable (page: Int) -> Unit,
+) {
     val palette = LocalMuiPalette.current
     val pagerState = rememberPagerState(pageCount = { pageCount })
     val scope = rememberCoroutineScope()
@@ -62,23 +86,54 @@ fun MuiCarousel(
         if (canNext) scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
     }
 
-    Column(modifier = modifier.fillMaxWidth()) {
+    val vertical = orientation == Orientation.Vertical
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val previousKey = if (vertical) Key.DirectionUp else if (rtl) Key.DirectionRight else Key.DirectionLeft
+    val nextKey = if (vertical) Key.DirectionDown else if (rtl) Key.DirectionLeft else Key.DirectionRight
+    Column(
+        modifier.fillMaxWidth()
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) {
+                    false
+                } else {
+                    when (event.key) {
+                        previousKey -> { onPrev(); true }
+                        nextKey -> { onNext(); true }
+                        else -> false
+                    }
+                }
+            }
+            .focusable(),
+    ) {
         Box {
-            HorizontalPager(
-                state = pagerState,
-                pageSpacing = pageSpacing,
-                modifier = Modifier.fillMaxWidth(),
-            ) { page ->
-                content(page)
+            if (vertical) {
+                VerticalPager(
+                    state = pagerState,
+                    pageSpacing = pageSpacing,
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp),
+                ) { page -> content(page) }
+            } else {
+                HorizontalPager(
+                    state = pagerState,
+                    pageSpacing = pageSpacing,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { page -> content(page) }
             }
             if (navigation != null) {
                 navigation(onPrev, canPrev, onNext, canNext)
+            } else if (vertical) {
+                Box(Modifier.align(Alignment.TopCenter).padding(top = 8.dp)) {
+                    MuiCarouselNavButton(onPrev, canPrev, directionLeft = true, rotation = 90f)
+                }
+                Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp)) {
+                    MuiCarouselNavButton(onNext, canNext, directionLeft = false, rotation = 90f)
+                }
             } else {
                 Box(Modifier.align(Alignment.CenterStart).padding(start = 8.dp)) {
-                    MuiCarouselNavButton(onClick = onPrev, enabled = canPrev, directionLeft = true)
+                    MuiCarouselNavButton(onPrev, canPrev, directionLeft = !rtl)
                 }
                 Box(Modifier.align(Alignment.CenterEnd).padding(end = 8.dp)) {
-                    MuiCarouselNavButton(onClick = onNext, enabled = canNext, directionLeft = false)
+                    MuiCarouselNavButton(onNext, canNext, directionLeft = rtl)
                 }
             }
         }
@@ -118,6 +173,7 @@ private fun MuiCarouselNavButton(
     onClick: () -> Unit,
     enabled: Boolean,
     directionLeft: Boolean,
+    rotation: Float = 0f,
 ) {
     val palette = LocalMuiPalette.current
     val interactionSource = rememberMuiInteractionSource()
@@ -128,7 +184,7 @@ private fun MuiCarouselNavButton(
         enabled = enabled,
         interactionSource = interactionSource,
     ) {
-        Canvas(modifier = Modifier.size(16.dp)) {
+        Canvas(modifier = Modifier.size(16.dp).rotate(rotation)) {
             val stroke = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round)
             val midY = size.height / 2f
             val color = palette.foreground

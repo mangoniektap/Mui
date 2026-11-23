@@ -17,12 +17,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
@@ -69,40 +66,33 @@ fun MuiPopover(
     }
 
     val clickSource = rememberMuiInteractionSource()
-    Box(
-        modifier = modifier.clickable(
-            interactionSource = clickSource,
-            indication = null,
-        ) { setOpen(!isOpen) },
-    ) { trigger() }
+    Box(modifier) {
+        Box(
+            modifier = Modifier.clickable(
+                interactionSource = clickSource,
+                indication = null,
+            ) { setOpen(!isOpen) },
+        ) { trigger() }
 
-    if (isOpen) {
-        val density = LocalDensity.current
-        val off = with(density) { offsetDp.roundToPx() }
-        val (alignment, offset) = when (side) {
-            PopoverSide.Top -> Alignment.TopCenter to IntOffset(0, -off)
-            PopoverSide.Bottom -> Alignment.BottomCenter to IntOffset(0, off)
-            PopoverSide.Left -> Alignment.CenterStart to IntOffset(-off, 0)
-            PopoverSide.Right -> Alignment.CenterEnd to IntOffset(off, 0)
-        }
-        Popup(
-            alignment = alignment,
-            offset = offset,
-            properties = PopupProperties(focusable = true),
-            onDismissRequest = { setOpen(false) },
-        ) {
-            val palette = LocalMuiPalette.current
-            val shape = RoundedCornerShape(MuiRadius.md)
-            CompositionLocalProvider(LocalMuiContentColor provides palette.popoverForeground) {
-                Column(
-                    modifier = Modifier
-                        .width(288.dp)
-                        .background(palette.popover, shape)
-                        .border(1.dp, palette.border, shape)
-                        .muiElevation("md", shape)
-                        .padding(16.dp),
-                    content = content,
-                )
+        if (isOpen) {
+            Popup(
+                popupPositionProvider = rememberMuiPopupPosition(MuiPopupSide.valueOf(side.name), offsetDp),
+                properties = PopupProperties(focusable = true),
+                onDismissRequest = { setOpen(false) },
+            ) {
+                val palette = LocalMuiPalette.current
+                val shape = RoundedCornerShape(MuiRadius.md)
+                CompositionLocalProvider(LocalMuiContentColor provides palette.popoverForeground) {
+                    Column(
+                        modifier = Modifier
+                            .width(288.dp)
+                            .background(palette.popover, shape)
+                            .border(1.dp, palette.border, shape)
+                            .muiElevation("md", shape)
+                            .padding(16.dp),
+                        content = content,
+                    )
+                }
             }
         }
     }
